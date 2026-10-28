@@ -1,0 +1,191 @@
+{
+    "nodes": [
+        {
+            "parameters": {
+                "inputSource": "passthrough"
+            },
+            "id": "167fa938-24a6-4b8d-9af5-d5a700f50066",
+            "name": "Execute Workflow Trigger",
+            "type": "n8n-nodes-base.executeWorkflowTrigger",
+            "typeVersion": 1.1,
+            "position": [
+                -864,
+                112
+            ]
+        },
+        {
+            "parameters": {
+                "jsCode": "const input = $input.first().json;\nconst rows = Array.isArray(input.rows) ? input.rows : [];\n\n// Output each row as a separate item for individual PATCH\nreturn rows\n  .filter(r => r && r.id != null && r.cleaned && r.original != null)\n  .map(r => ({ json: { id: r.id, facebook: r.cleaned, original: r.original } }));\n"
+            },
+            "id": "a5c0d9d3-be38-496c-a8e3-e320359c3b1d",
+            "name": "Prepare Bulk Payload",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                -640,
+                112
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 2
+                    },
+                    "conditions": [
+                        {
+                            "id": "c",
+                            "leftValue": "={{ $json.id }}",
+                            "rightValue": 0,
+                            "operator": {
+                                "type": "string",
+                                "operation": "notEmpty",
+                                "singleValue": true
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "id": "adc2b20c-6d24-4511-ad1f-3a7ee83c8dd1",
+            "name": "Has Rows?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.2,
+            "position": [
+                -416,
+                112
+            ]
+        },
+        {
+            "parameters": {
+                "method": "PATCH",
+                "url": "https://api.xfnite.cloud/User",
+                "authentication": "genericCredentialType",
+                "genericAuthType": "httpHeaderAuth",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Content-Type",
+                            "value": "application/json"
+                        },
+                        {
+                            "name": "Prefer",
+                            "value": "return=representation"
+                        }
+                    ]
+                },
+                "sendBody": true,
+                "specifyBody": "json",
+                "jsonBody": "={{ JSON.stringify({ facebook: $json.facebook }) }}",
+                "options": {
+                    "response": {
+                        "response": {
+                            "fullResponse": true,
+                            "neverError": true
+                        }
+                    }
+                },
+                "sendQuery": true,
+                "queryParameters": {
+                    "parameters": [
+                        {
+                            "name": "id",
+                            "value": "=eq.{{ $json.id }}"
+                        },
+                        {
+                            "name": "facebook",
+                            "value": "=eq.{{ $json.original }}"
+                        },
+                        {
+                            "name": "select",
+                            "value": "id"
+                        }
+                    ]
+                }
+            },
+            "id": "59a711c0-5e38-4d47-8037-ca4eb5af08f8",
+            "name": "Update Facebook (PATCH)",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                -192,
+                16
+            ],
+            "credentials": {
+                "httpHeaderAuth": {
+                    "id": "OCe8kVakxNC6Apim",
+                    "name": "Header Auth account"
+                }
+            },
+            "onError": "continueRegularOutput"
+        },
+        {
+            "parameters": {
+                "jsCode": "// Fail the run if any update was rejected, so problems show up in the executions list\nconst items = $input.all();\nconst failed = items.filter(i => !(i.json.statusCode >= 200 && i.json.statusCode < 300));\nif (failed.length) {\n  const f = failed[0].json;\n  throw new Error(`${failed.length} of ${items.length} updates failed. First: HTTP ${f.statusCode ?? '-'} ${JSON.stringify(f.body ?? f.error ?? '').slice(0, 300)}`);\n}\n// An empty body means the link changed after it was read, so it was left alone\nconst updated = items.filter(i => Array.isArray(i.json.body) && i.json.body.length > 0).length;\nreturn [{ json: { sent: items.length, updated, unchanged_since_read: items.length - updated } }];\n"
+            },
+            "id": "1a9ceb95-1ac5-42d5-81f6-519d6dee8c93",
+            "name": "Check Results",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                32,
+                16
+            ]
+        }
+    ],
+    "connections": {
+        "Execute Workflow Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Prepare Bulk Payload",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Prepare Bulk Payload": {
+            "main": [
+                [
+                    {
+                        "node": "Has Rows?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Has Rows?": {
+            "main": [
+                [
+                    {
+                        "node": "Update Facebook (PATCH)",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Update Facebook (PATCH)": {
+            "main": [
+                [
+                    {
+                        "node": "Check Results",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "pinData": {},
+    "meta": {
+        "instanceId": "4cc403a4c2e950b3504b7bcf03ba4a07b56850f8e3d68f3eaf4db7820d08d8d9"
+    }
+}

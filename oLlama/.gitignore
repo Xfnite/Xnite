@@ -1,0 +1,14 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+
+# CSV files
+*.csv
+**/*.csv
+
+# Test files
+test_*
+*.test.*
+scripts/test_*

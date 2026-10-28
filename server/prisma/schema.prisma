@@ -1,0 +1,467 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider     = "postgresql"
+  relationMode = "prisma"
+}
+
+model DirectMessage {
+  id        String   @id @default(dbgenerated("gen_random_uuid()"))
+  toEmail   String
+  fromName  String
+  subject   String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  imageUrls String?
+
+  @@index([toEmail, isRead])
+}
+
+model User {
+  id                               String                 @id @default(dbgenerated("gen_random_uuid()"))
+  email                            String                 @unique
+  name                             String
+  role                             String                 @default("applicant")
+  status                           String                 @default("Active")
+  createdAt                        DateTime               @default(now())
+  updatedAt                        DateTime               @updatedAt
+  password                         String?
+  facebook                         String?
+  phone                            String?
+  refererEmail                     String?
+  hasCompletedPreCourse            Boolean                @default(false)
+  isRegistered                     Boolean                @default(false)
+  isDashboardCompleted             Boolean                @default(false)
+  gingerPassword                   String?
+  gingerEmail                      String?                @unique
+  gingerUsername                   String?                @unique
+  onboardingProgress               Json?
+  firstName                        String?
+  lastName                         String?
+  isRulesAndGuidelinesCompleted    Boolean                @default(false)
+  onRulesAndGuidelinesProgress     Json?
+  lastLogin                        DateTime?
+  hasClickedLandCoverTraining      Boolean                @default(false)
+  hasClickedTransportationTraining Boolean                @default(false)
+  landCoverProgress                Json?
+  transportationProgress           Json?
+  activeProjectsTutorialProgress   Json?
+  linkedRecruiterEmail             String?
+  group_id                         Int?
+  team_id                          Int?
+  labelerId                        String?
+  labelerPassword                  String?
+  sidebarBannerUrl                 String?
+  labelerRefererEmail              String?
+  previousGingerAccounts           Json?
+  username                        String?                @unique
+  referralSlug                     String?                @unique
+  acknowledgedPerformanceAlerts    Json?                  @default("[]")
+  hadProjectBefore                 Boolean                @default(false)
+  hasAgreedToTerms                 Boolean                @default(false)
+  currentIncome                    CurrentIncome?
+  incomeHistory                    IncomeHistory[]
+  paymentDetails                   PaymentDetails?
+  projects                         Project[]
+  trainings                        Training?
+  profileChangeRequests            ProfileChangeRequest[]
+  referer                          Referal?               @relation(fields: [refererEmail], references: [email])
+
+  @@index([refererEmail])
+  @@index([createdAt(sort: Desc)])
+  @@index([gingerEmail])
+  @@index([gingerUsername])
+  @@index([username])
+}
+
+model Project {
+  id              String   @id @default(dbgenerated("gen_random_uuid()"))
+  projectId       String
+  nameDesignation String
+  status          String
+  endDate         DateTime
+  taskNum         Int
+  registeredHours Float
+  userId          String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, projectId])
+}
+
+model SoftwareCredential {
+  id          String   @id @default(dbgenerated("gen_random_uuid()"))
+  role        String
+  softwareUid String   @unique
+  password    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model PaymentDetails {
+  id            String                 @id @default(dbgenerated("gen_random_uuid()"))
+  email         String                 @unique
+  payeeName     String?
+  payeeUid      String?
+  paymentMethod String?
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+  qrImageUrl    String?
+  lastName      String?
+  user          User                   @relation(fields: [email], references: [email], onDelete: Cascade)
+  history       PaymentMethodHistory[]
+}
+
+model PaymentMethodHistory {
+  id               String         @id @default(dbgenerated("gen_random_uuid()"))
+  email            String
+  oldPayeeName     String?
+  oldPayeeUid      String?
+  oldPaymentMethod String?
+  newPayeeName     String?
+  newPayeeUid      String?
+  newPaymentMethod String?
+  changedAt        DateTime       @default(now())
+  oldQrImageUrl    String?
+  newQrImageUrl    String?
+  oldLastName      String?
+  newLastName      String?
+  paymentDetails   PaymentDetails @relation(fields: [email], references: [email], onDelete: Cascade)
+}
+
+model CurrentIncome {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()"))
+  email              String    @unique
+  currentPeriodStart DateTime?
+  currentPeriodEnd   DateTime?
+  estimatedAmount    Float     @default(0)
+  status             String    @default("Accumulating")
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  rawComputation     Json?
+  user               User      @relation(fields: [email], references: [email], onDelete: Cascade)
+}
+
+model IncomeHistory {
+  id             String    @id @default(dbgenerated("gen_random_uuid()"))
+  email          String
+  amountPaid     Float
+  periodStart    DateTime?
+  periodEnd      DateTime?
+  payoutDate     DateTime?
+  status         String    @default("Paid")
+  transactionId  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  rawComputation Json?
+  user           User      @relation(fields: [email], references: [email], onDelete: Cascade)
+
+  @@index([email])
+  @@index([status])
+}
+
+model Referal {
+  id            String   @id @default(dbgenerated("gen_random_uuid()"))
+  email         String   @unique
+  code          String
+  status        String   @default("Active")
+  howManyUse    Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+  name          String?
+  username      String?
+  sitename      String   @default("XFd_")
+  referredUsers User[]
+}
+
+model Ranking {
+  id        String   @id @default(dbgenerated("gen_random_uuid()"))
+  email     String   @unique
+  username  String
+  balance   Float
+  rank      Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CheckerRanking {
+  id        String   @id @default(dbgenerated("gen_random_uuid()"))
+  email     String   @unique
+  username  String
+  balance   Float
+  rank      Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Training {
+  id        String   @id @default(dbgenerated("gen_random_uuid()"))
+  userId    String   @unique
+  trainings Json[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model ChatMessage {
+  id            String   @id @default(dbgenerated("gen_random_uuid()"))
+  chatType      String
+  sender        String
+  senderRole    String?
+  text          String
+  createdAt     DateTime @default(now())
+  isEdited      Boolean  @default(false)
+  updatedAt     DateTime @default(now()) @updatedAt
+  imageUrl      String?
+  replyToId     String?
+  replyToSender String?
+  replyToText   String?
+  senderEmail   String?
+
+  @@index([chatType, createdAt])
+}
+
+model SystemSetting {
+  id    String @id
+  key   String @unique
+  value String
+}
+
+model Attendance {
+  id             String              @id @default(dbgenerated("gen_random_uuid()"))
+  createdAt      DateTime            @default(now())
+  createdBy      String?
+  date           DateTime            @default(now())
+  password       String
+  title          String
+  createdByEmail String?
+  slug           String              @unique @default(dbgenerated("gen_random_uuid()"))
+  attendances    AttendanceSession[]
+}
+
+model AttendanceSession {
+  id             String     @id @default(dbgenerated("gen_random_uuid()"))
+  meetingId      String
+  userEmail      String
+  userName       String
+  attendedAt     DateTime   @default(now())
+  facebook       String?
+  gingerUsername String?
+  meeting        Attendance @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, userEmail])
+}
+
+model Group {
+  id            String   @id @default(dbgenerated("gen_random_uuid()"))
+  groupName     String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  groupId       Int      @unique
+  groupType     String   @default("group")
+  managerEmail  String?
+  ownerEmail    String?
+  checkerLink   String?
+  judgerLink    String?
+  checkerName   String?
+  judgerName    String?
+  parentGroupId Int?
+  logoUrl       String?
+  status        String   @default("active")
+}
+
+model WorkLog {
+  id          Int       @default(autoincrement())
+  ownerName   String    @map("owner_name")
+  projectId   Int       @map("project_id")
+  role        String
+  worktime    Float
+  taskNum     Int       @map("task_num")
+  features    Int
+  uuid        String    @id @default(dbgenerated("gen_random_uuid()"))
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at")
+  periodEnd   DateTime? @map("period_end")
+  periodStart DateTime? @map("period_start")
+  log_date    DateTime  @default(dbgenerated("CURRENT_DATE")) @db.Date
+
+  @@unique([ownerName, projectId, role, log_date])
+  @@index([ownerName])
+  @@index([id])
+  @@index([projectId])
+  @@map("work_logs")
+}
+
+model BroadcastMessage {
+  id         String             @id @default(dbgenerated("gen_random_uuid()"))
+  fromName   String
+  subject    String
+  message    String
+  imageUrls  String?
+  createdAt  DateTime           @default(now())
+  recipients MessageRecipient[]
+}
+
+model MessageRecipient {
+  id                 String           @id @default(dbgenerated("gen_random_uuid()"))
+  broadcastMessageId String
+  toEmail            String
+  isRead             Boolean          @default(false)
+  message            BroadcastMessage @relation(fields: [broadcastMessageId], references: [id], onDelete: Cascade)
+
+  @@index([toEmail, isRead])
+  @@index([broadcastMessageId])
+}
+
+model LoyaltyRank {
+  id            String   @id @default(dbgenerated("gen_random_uuid()"))
+  rankNum       Int      @unique
+  name          String
+  minLxp        Int
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime
+  recruiterName String?
+  torchTarget   Int      @default(20)
+  torchXp       Int      @default(10)
+}
+
+model UserLoyalty {
+  id              String   @id @default(dbgenerated("gen_random_uuid()"))
+  email           String   @unique
+  totalLxp        Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime
+  completedQuests Json     @default("[]")
+  completionsDate DateTime @default(now()) @db.Date
+  questProgress   Json     @default("{}")
+
+  @@index([email])
+}
+
+model AutomatedChatMessage {
+  id         String    @id @default(dbgenerated("gen_random_uuid()"))
+  chatType   String
+  senderName String?   @default("Lia")
+  senderRole String?   @default("moderator")
+  message    String
+  frequency  Int
+  isActive   Boolean   @default(true)
+  startTime  DateTime?
+  endTime    DateTime?
+  lastSentAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @default(now()) @updatedAt
+
+  @@index([isActive])
+}
+
+model WeeklyQuestClaim {
+  id        String   @id @default(dbgenerated("gen_random_uuid()"))
+  email     String
+  questId   String
+  weekKey   String
+  lxp       Int
+  createdAt DateTime @default(now())
+
+  @@unique([email, questId, weekKey])
+  @@index([email, weekKey])
+}
+
+// One row per LXP reward claimed (daily or weekly quest), for the Loyalty
+// Points history. Append-only; written alongside the totalLxp increment.
+model LxpClaimHistory {
+  id        String   @id @default(dbgenerated("gen_random_uuid()"))
+  email     String
+  questId   String
+  questType String
+  lxp       Int
+  claimedAt DateTime @default(now())
+
+  @@index([email, claimedAt])
+}
+
+model ProfileChangeRequest {
+  id                 String    @id @default(dbgenerated("gen_random_uuid()"))
+  userEmail          String
+  requestedFirstName String?
+  requestedLastName  String?
+  requestedFacebook  String?
+  status             String    @default("PENDING")
+  rejectionReason    String?
+  reviewedBy         String?
+  reviewedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  user               User      @relation(fields: [userEmail], references: [email], onDelete: Cascade)
+
+  @@index([userEmail])
+  @@index([status])
+}
+
+model JukeboxListening {
+  id        String   @id @default(dbgenerated("gen_random_uuid()"))
+  userEmail String
+  periodKey String
+  minutes   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userEmail, periodKey])
+}
+
+model TorchHelp {
+  id          String   @id @default(dbgenerated("gen_random_uuid()"))
+  helperEmail String
+  helpedEmail String
+  periodKey   String
+  messageId   String?
+  createdAt   DateTime @default(now())
+
+  @@unique([helpedEmail, periodKey])
+  @@index([helperEmail, periodKey])
+}
+
+// Who activated which user from the "Activate Users" form, and when. No relation to
+// User on purpose: the record must survive the account being deleted.
+model UserActivationLog {
+  id               String   @id @default(dbgenerated("gen_random_uuid()"))
+  userId           String
+  userEmail        String
+  previousStatus   String?
+  activatedByEmail String
+  activatedByRole  String
+  createdAt        DateTime @default(now())
+
+  @@index([activatedByEmail, createdAt])
+  @@index([userEmail])
+}
+
+// Permanent archive for user questions, inquiries, and FAQ training data.
+// Strictly exempt from the 30-day auto-deletion job.
+model FaqQuestionArchive {
+  id             String    @id @default(dbgenerated("gen_random_uuid()"))
+  originalMsgId  String?   @map("original_msg_id")
+  chatType       String    @map("chat_type")
+  category       String?
+  intent         String?
+  question       String
+  askedBy        String    @map("asked_by")
+  askedByEmail   String?   @map("asked_by_email")
+  askedByRole    String?   @map("asked_by_role")
+  answer         String?
+  answeredBy     String?   @map("answered_by")
+  answeredByRole String?   @map("answered_by_role")
+  answeredAt     DateTime? @map("answered_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  isVerified     Boolean   @default(false) @map("is_verified")
+  metadata       Json?     @default("{}")
+
+  @@index([category])
+  @@index([chatType, createdAt])
+  @@index([askedByEmail])
+  @@map("faq_question_archive")
+}

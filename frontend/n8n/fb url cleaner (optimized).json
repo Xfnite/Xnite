@@ -1,0 +1,562 @@
+{
+    "nodes": [
+        {
+            "parameters": {},
+            "id": "b27aa8a0-6d1e-4185-90b6-2ddf7dfb56d3",
+            "name": "Manual Trigger",
+            "type": "n8n-nodes-base.manualTrigger",
+            "typeVersion": 1,
+            "position": [
+                144,
+                -320
+            ]
+        },
+        {
+            "parameters": {
+                "rule": {
+                    "interval": [
+                        {
+                            "triggerAtHour": 6
+                        }
+                    ]
+                }
+            },
+            "id": "f3361d6b-de66-4967-8e42-62b7195e08d6",
+            "name": "Daily Schedule",
+            "type": "n8n-nodes-base.scheduleTrigger",
+            "typeVersion": 1.2,
+            "position": [
+                144,
+                -112
+            ]
+        },
+        {
+            "parameters": {
+                "url": "={{ 'https://api.xfnite.cloud/User?select=id,facebook&facebook=neq.' + '&facebook=not.match.' + encodeURIComponent('^https://www[.]facebook[.]com/[A-Za-z0-9._-]+$') + '&facebook=not.match.' + encodeURIComponent('^https://www[.]facebook[.]com/profile[.]php[?]id=[0-9]+$') + '&facebook=not.match.' + encodeURIComponent('^https://www[.]facebook[.]com/people/[^/?#]+/[^/?#]+$') }}",
+                "authentication": "genericCredentialType",
+                "genericAuthType": "httpHeaderAuth",
+                "sendQuery": false,
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "Accept",
+                            "value": "application/json"
+                        }
+                    ]
+                },
+                "options": {
+                    "response": {
+                        "response": {
+                            "fullResponse": true,
+                            "neverError": true
+                        }
+                    }
+                }
+            },
+            "id": "df740a63-6c05-40e6-bf1f-151c836c57a7",
+            "name": "Fetch Users (DB)",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                384,
+                -208
+            ],
+            "credentials": {
+                "httpHeaderAuth": {
+                    "id": "OCe8kVakxNC6Apim",
+                    "name": "Header Auth account"
+                }
+            },
+            "onError": "continueRegularOutput"
+        },
+        {
+            "parameters": {
+                "jsCode": "function parseUrl(str){\n  var s=str;\n  var pi=s.indexOf('://');\n  if(pi!==-1) s=s.substring(pi+3);\n  var hi=s.indexOf('#');\n  if(hi!==-1) s=s.substring(0,hi);\n  var search='';\n  var qi=s.indexOf('?');\n  if(qi!==-1){search=s.substring(qi+1);s=s.substring(0,qi);}\n  var hostname='';var pathname='/';\n  var si=s.indexOf('/');\n  if(si!==-1){hostname=s.substring(0,si).toLowerCase();pathname=s.substring(si);}\n  else{hostname=s.toLowerCase();}\n  function getParam(name){\n    if(!search) return null;\n    var pairs=search.split('&');\n    for(var i=0;i<pairs.length;i++){\n      var eq=pairs[i].indexOf('=');\n      if(eq!==-1&&pairs[i].substring(0,eq)===name) return pairs[i].substring(eq+1);\n      else if(pairs[i]===name) return \"\";\n    }\n    return null;\n  }\n  return {hostname:hostname,pathname:pathname,search:search,getParam:getParam};\n}\nvar FB_DOMAINS=['facebook.com','fb.com','fb.me','fb.watch','m.me','messenger.com'];\nfunction isFbHost(h){\n  for(var i=0;i<FB_DOMAINS.length;i++){\n    var d=FB_DOMAINS[i];\n    if(h===d||h.endsWith('.'+d)) return true;\n  }\n  return false;\n}\nfunction normalizeFb(raw){\n  var fb=(raw||'').trim();\n  if(!fb) return {action:'skip',reason:'empty'};\n  if(fb.charAt(0)==='@') fb=fb.substring(1).trim();\n  if(!fb) return {action:'skip',reason:'empty_after_trim'};\n  // Text pasted around a link, e.g. \"My fb: https://facebook.com/x\": keep only the link\n  var urlStart=fb.search(/https?:\\/\\//i);\n  if(urlStart>0) fb=fb.substring(urlStart);\n\n  var lo=fb.toLowerCase();\n  // Check only the host part, so usernames like \"kim.mendoza\" don't match \"m.me\"\n  var hostPart=lo;\n  var pi0=hostPart.indexOf('://');\n  if(pi0!==-1) hostPart=hostPart.substring(pi0+3);\n  hostPart=hostPart.split(/[\\/?#\\s]/)[0];\n  var hasDomain=isFbHost(hostPart);\n\n  if(!hasDomain){\n    var ok=true;\n    for(var i=0;i<fb.length;i++){\n      var c=fb.charAt(i);\n      if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c==='.'||c==='-'||c==='_')){ok=false;break;}\n    }\n    if(ok&&fb.length>0) return {action:'clean',url:'https://www.facebook.com/'+fb};\n    return {action:'skip',reason:'no_domain_invalid_chars'};\n  }\n\n  fb=fb.split(/\\s/)[0];\n  lo=fb.toLowerCase();\n  if(!lo.startsWith('http://')&&!lo.startsWith('https://')) fb='https://'+fb;\n\n  var u=parseUrl(fb);\n  var host=u.hostname;\n  var path=u.pathname;\n  if(!isFbHost(host)) return {action:'skip',reason:'not_facebook_host'};\n\n  if(host==='m.me'||host==='www.m.me'){\n    var un=path;\n    while(un.charAt(0)==='/') un=un.substring(1);\n    while(un.length>0&&un.charAt(un.length-1)==='/') un=un.substring(0,un.length-1);\n    return un?{action:'clean',url:'https://www.facebook.com/'+un}:{action:'skip',reason:'empty_mme'};\n  }\n\n  if(host.indexOf('messenger.com')!==-1){\n    var ti=path.indexOf('/t/');\n    if(ti!==-1){\n      var after=path.substring(ti+3);\n      var si2=after.indexOf('/');\n      var thread=si2!==-1?after.substring(0,si2):after;\n      if(thread) return {action:'clean',url:'https://www.facebook.com/'+thread};\n    }\n    return {action:'skip',reason:'no_messenger_thread'};\n  }\n\n  if(host==='fb.watch'||host==='fb.me') return {action:'fetch',url:fb};\n\n  var pathLo=path.toLowerCase();\n  if(pathLo.indexOf('/share/')!==-1||pathLo==='/share') return {action:'fetch',url:fb};\n  if(host==='l.facebook.com'||host==='lm.facebook.com') return {action:'fetch',url:fb};\n  if(pathLo.indexOf('/story.php')!==-1) return {action:'fetch',url:fb};\n\n  if(pathLo.indexOf('/profile.php')!==-1){\n    var pid=u.getParam('id');\n    return pid?{action:'clean',url:'https://www.facebook.com/profile.php?id='+pid}:{action:'skip',reason:'no_profile_id'};\n  }\n\n  // Kept as /people/<name>/<id> until it's confirmed profile.php?id=<id> works in Messenger search\n  if(pathLo.indexOf('/people/')===0){\n    var pseg=path.split('/').filter(function(s){return s.length>0;});\n    if(pseg.length<3) return {action:'skip',reason:'incomplete_people_link'};\n    return {action:'clean',url:'https://www.facebook.com/'+pseg.slice(0,3).join('/')};\n  }\n\n  if(path.length>1&&path.substring(0,6).toLowerCase()==='/pfbid'){\n    var cp2=path;\n    while(cp2.length>0&&cp2.charAt(cp2.length-1)==='/') cp2=cp2.substring(0,cp2.length-1);\n    return {action:'clean',url:'https://www.facebook.com'+cp2};\n  }\n\n  var rawPath=path;\n  while(rawPath.charAt(0)==='/') rawPath=rawPath.substring(1);\n  while(rawPath.length>0&&rawPath.charAt(rawPath.length-1)==='/') rawPath=rawPath.substring(0,rawPath.length-1);\n  var seg=rawPath.split('/').filter(function(s){return s.length>0;});\n\n  if(seg.length===0) return {action:'skip',reason:'no_path'};\n\n  var first=seg[0];\n  var firstLo=first.toLowerCase();\n  var nonProfile='groups,events,watch,gaming,marketplace,pages,hashtag,search,help,settings,login,recover,dialog,sharer,plugins,ads,business,privacy,policies,legal,directory,biz,fundraisers,offers,jobs,reel,reels,stories,photo,photos,videos,live,people,share,messages,notifications,friends,home';\n  if(nonProfile.split(',').indexOf(firstLo)!==-1) return {action:'skip',reason:'non_profile_path'};\n  if(firstLo.indexOf('.php')!==-1) return {action:'skip',reason:'php_endpoint'};\n\n  if(seg.length===1) return {action:'clean',url:'https://www.facebook.com/'+first};\n\n  var profileSubs='posts,photos,videos,about,friends,reviews,reels,followers,following,likes,photos_albums,map,sports,music,movies,tv,books,check_ins,mentions,timeline,info';\n  var sec=seg[1].toLowerCase();\n  if(profileSubs.split(',').indexOf(sec)!==-1) return {action:'clean',url:'https://www.facebook.com/'+first};\n  var isNum=sec.length>0;\n  for(var j=0;j<sec.length;j++){if(sec.charAt(j)<'0'||sec.charAt(j)>'9'){isNum=false;break;}}\n  if(isNum) return {action:'clean',url:'https://www.facebook.com/'+first};\n  var validFirst=first.length>=2;\n  for(var k=0;k<first.length&&validFirst;k++){\n    var ch=first.charAt(k);\n    if(!((ch>='a'&&ch<='z')||(ch>='A'&&ch<='Z')||(ch>='0'&&ch<='9')||ch==='.'||ch==='-'||ch==='_')) validFirst=false;\n  }\n  if(validFirst) return {action:'clean',url:'https://www.facebook.com/'+first};\n\n  return {action:'skip',reason:'unrecognized_pattern'};\n}\nvar res=$input.first().json;\n// Fail the run instead of silently doing nothing (e.g. bad credentials)\nif(res.statusCode!==200){\n  throw new Error('DB fetch failed: '+(res.statusCode?'HTTP '+res.statusCode+' ':'')+JSON.stringify(res.body||res.error||'').substring(0,300));\n}\nvar rows;\nif(Array.isArray(res.body)) rows=res.body;\nelse if(typeof res.body==='string'){try{rows=JSON.parse(res.body);}catch(e){rows=[];}}\nelse rows=[];\nif(!Array.isArray(rows)) rows=[];\nif(rows.length===0) return [{json:{info:\"no_rows\",rowCount:0}}];\n\n// Links that couldn't be resolved are retried once a week instead of every day\nvar RETRY_MS=7*24*60*60*1000;\nvar now=Date.now();\nvar memo=$getWorkflowStaticData('global');\nmemo.unresolved=memo.unresolved||{};\nfor(var key in memo.unresolved){\n  if(now-memo.unresolved[key].at>4*RETRY_MS) delete memo.unresolved[key];\n}\n\nvar out=[];\nvar skippedCount=0;\nvar alreadyCleanCount=0;\nvar waitingRetryCount=0;\nvar skippedSamples=[];\nvar alreadyCleanSamples=[];\nfor(var i=0;i<rows.length;i++){\n  var r=rows[i];\n  var fb=(r.facebook||'').trim();\n  var n=normalizeFb(fb);\n  if(n.action==='fetch'){\n    var m=memo.unresolved[r.id];\n    if(m&&m.v===r.facebook&&now-m.at<RETRY_MS){waitingRetryCount++;continue;}\n    out.push({json:{id:r.id,original:r.facebook,short_url:n.url,action:'fetch'}});\n  }else if(n.action==='clean'){\n    if(n.url&&n.url!==r.facebook){\n      out.push({json:{id:r.id,original:r.facebook,cleaned:n.url,action:'clean'}});\n    }else{\n      alreadyCleanCount++;\n      if(alreadyCleanSamples.length<10) alreadyCleanSamples.push({id:r.id,facebook:fb,cleanedUrl:n.url});\n    }\n  }else{\n    skippedCount++;\n    if(skippedSamples.length<10) skippedSamples.push({id:r.id,facebook:fb,reason:n.reason});\n  }\n}\nif(out.length===0){\n  return [{json:{\n    info:\"all_skipped_or_already_clean\",\n    total:rows.length,\n    skipped:skippedCount,\n    already_clean:alreadyCleanCount,\n    waiting_retry:waitingRetryCount,\n    skipped_samples:skippedSamples,\n    already_clean_samples:alreadyCleanSamples\n  }}];\n}\nreturn out;\n"
+            },
+            "id": "1d36cb77-1328-4538-bea0-bb8ebe515328",
+            "name": "Classify Links",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                608,
+                -208
+            ],
+            "alwaysOutputData": true
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 3
+                    },
+                    "conditions": [
+                        {
+                            "id": "f1",
+                            "leftValue": "={{ $json.id }}",
+                            "rightValue": "",
+                            "operator": {
+                                "type": "string",
+                                "operation": "notEmpty",
+                                "singleValue": true
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "type": "n8n-nodes-base.filter",
+            "typeVersion": 2.3,
+            "position": [
+                816,
+                -208
+            ],
+            "id": "428a3d7b-dfb1-4dfb-8a4e-b04e8dbfb9fe",
+            "name": "Filter1"
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 2
+                    },
+                    "conditions": [
+                        {
+                            "id": "a",
+                            "leftValue": "={{ $json.action }}",
+                            "rightValue": "fetch",
+                            "operator": {
+                                "type": "string",
+                                "operation": "equals"
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "id": "a2b9f3d3-2d28-4021-b857-4a6c5ae00319",
+            "name": "Needs Fetch?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.2,
+            "position": [
+                1040,
+                -208
+            ]
+        },
+        {
+            "parameters": {
+                "options": {
+                    "reset": false
+                }
+            },
+            "id": "12f7392c-1231-407c-a85e-a289e9555059",
+            "name": "Loop Over Items",
+            "type": "n8n-nodes-base.splitInBatches",
+            "typeVersion": 3,
+            "position": [
+                1312,
+                -304
+            ]
+        },
+        {
+            "parameters": {
+                "url": "={{ $json.short_url }}",
+                "sendHeaders": true,
+                "headerParameters": {
+                    "parameters": [
+                        {
+                            "name": "User-Agent",
+                            "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+                        },
+                        {
+                            "name": "Accept",
+                            "value": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+                        },
+                        {
+                            "name": "Accept-Language",
+                            "value": "en-US,en;q=0.9"
+                        },
+                        {
+                            "name": "Sec-Fetch-Site",
+                            "value": "none"
+                        },
+                        {
+                            "name": "Sec-Fetch-Mode",
+                            "value": "navigate"
+                        },
+                        {
+                            "name": "Sec-Fetch-User",
+                            "value": "?1"
+                        },
+                        {
+                            "name": "Sec-Fetch-Dest",
+                            "value": "document"
+                        },
+                        {
+                            "name": "Upgrade-Insecure-Requests",
+                            "value": "1"
+                        }
+                    ]
+                },
+                "options": {
+                    "redirect": {
+                        "redirect": {
+                            "followRedirects": false
+                        }
+                    },
+                    "response": {
+                        "response": {
+                            "fullResponse": true,
+                            "neverError": true
+                        }
+                    }
+                }
+            },
+            "id": "dc57ff5c-b7d5-4a59-a1cc-e6a93f7c366d",
+            "name": "Fetch (no follow)",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [
+                1552,
+                -384
+            ],
+            "onError": "continueRegularOutput"
+        },
+        {
+            "parameters": {
+                "amount": 3
+            },
+            "id": "1e7b78dc-7526-479d-bbe0-e1bd88191497",
+            "name": "Wait (rate limit)",
+            "type": "n8n-nodes-base.wait",
+            "typeVersion": 1.1,
+            "position": [
+                1776,
+                -384
+            ],
+            "webhookId": "d3000000-0000-4000-8000-000000000013"
+        },
+        {
+            "parameters": {
+                "mode": "runOnceForEachItem",
+                "jsCode": "function parseUrl(str){\n  var s=str;\n  var pi=s.indexOf('://');\n  if(pi!==-1) s=s.substring(pi+3);\n  var hi=s.indexOf('#');\n  if(hi!==-1) s=s.substring(0,hi);\n  var search='';\n  var qi=s.indexOf('?');\n  if(qi!==-1){search=s.substring(qi+1);s=s.substring(0,qi);}\n  var hostname='';var pathname='/';\n  var si=s.indexOf('/');\n  if(si!==-1){hostname=s.substring(0,si).toLowerCase();pathname=s.substring(si);}\n  else{hostname=s.toLowerCase();}\n  function getParam(name){\n    if(!search) return null;\n    var pairs=search.split('&');\n    for(var i=0;i<pairs.length;i++){\n      var eq=pairs[i].indexOf('=');\n      if(eq!==-1&&pairs[i].substring(0,eq)===name) return pairs[i].substring(eq+1);\n      else if(pairs[i]===name) return \"\";\n    }\n    return null;\n  }\n  return {hostname:hostname,pathname:pathname,search:search,getParam:getParam};\n}\nvar FB_DOMAINS=['facebook.com','fb.com','fb.me','fb.watch','m.me','messenger.com'];\nfunction isFbHost(h){\n  for(var i=0;i<FB_DOMAINS.length;i++){\n    var d=FB_DOMAINS[i];\n    if(h===d||h.endsWith('.'+d)) return true;\n  }\n  return false;\n}\nfunction normalizeFb(raw){\n  var fb=(raw||'').trim();\n  if(!fb) return {action:'skip',reason:'empty'};\n  if(fb.charAt(0)==='@') fb=fb.substring(1).trim();\n  if(!fb) return {action:'skip',reason:'empty_after_trim'};\n  // Text pasted around a link, e.g. \"My fb: https://facebook.com/x\": keep only the link\n  var urlStart=fb.search(/https?:\\/\\//i);\n  if(urlStart>0) fb=fb.substring(urlStart);\n\n  var lo=fb.toLowerCase();\n  // Check only the host part, so usernames like \"kim.mendoza\" don't match \"m.me\"\n  var hostPart=lo;\n  var pi0=hostPart.indexOf('://');\n  if(pi0!==-1) hostPart=hostPart.substring(pi0+3);\n  hostPart=hostPart.split(/[\\/?#\\s]/)[0];\n  var hasDomain=isFbHost(hostPart);\n\n  if(!hasDomain){\n    var ok=true;\n    for(var i=0;i<fb.length;i++){\n      var c=fb.charAt(i);\n      if(!((c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c==='.'||c==='-'||c==='_')){ok=false;break;}\n    }\n    if(ok&&fb.length>0) return {action:'clean',url:'https://www.facebook.com/'+fb};\n    return {action:'skip',reason:'no_domain_invalid_chars'};\n  }\n\n  fb=fb.split(/\\s/)[0];\n  lo=fb.toLowerCase();\n  if(!lo.startsWith('http://')&&!lo.startsWith('https://')) fb='https://'+fb;\n\n  var u=parseUrl(fb);\n  var host=u.hostname;\n  var path=u.pathname;\n  if(!isFbHost(host)) return {action:'skip',reason:'not_facebook_host'};\n\n  if(host==='m.me'||host==='www.m.me'){\n    var un=path;\n    while(un.charAt(0)==='/') un=un.substring(1);\n    while(un.length>0&&un.charAt(un.length-1)==='/') un=un.substring(0,un.length-1);\n    return un?{action:'clean',url:'https://www.facebook.com/'+un}:{action:'skip',reason:'empty_mme'};\n  }\n\n  if(host.indexOf('messenger.com')!==-1){\n    var ti=path.indexOf('/t/');\n    if(ti!==-1){\n      var after=path.substring(ti+3);\n      var si2=after.indexOf('/');\n      var thread=si2!==-1?after.substring(0,si2):after;\n      if(thread) return {action:'clean',url:'https://www.facebook.com/'+thread};\n    }\n    return {action:'skip',reason:'no_messenger_thread'};\n  }\n\n  if(host==='fb.watch'||host==='fb.me') return {action:'fetch',url:fb};\n\n  var pathLo=path.toLowerCase();\n  if(pathLo.indexOf('/share/')!==-1||pathLo==='/share') return {action:'fetch',url:fb};\n  if(host==='l.facebook.com'||host==='lm.facebook.com') return {action:'fetch',url:fb};\n  if(pathLo.indexOf('/story.php')!==-1) return {action:'fetch',url:fb};\n\n  if(pathLo.indexOf('/profile.php')!==-1){\n    var pid=u.getParam('id');\n    return pid?{action:'clean',url:'https://www.facebook.com/profile.php?id='+pid}:{action:'skip',reason:'no_profile_id'};\n  }\n\n  // Kept as /people/<name>/<id> until it's confirmed profile.php?id=<id> works in Messenger search\n  if(pathLo.indexOf('/people/')===0){\n    var pseg=path.split('/').filter(function(s){return s.length>0;});\n    if(pseg.length<3) return {action:'skip',reason:'incomplete_people_link'};\n    return {action:'clean',url:'https://www.facebook.com/'+pseg.slice(0,3).join('/')};\n  }\n\n  if(path.length>1&&path.substring(0,6).toLowerCase()==='/pfbid'){\n    var cp2=path;\n    while(cp2.length>0&&cp2.charAt(cp2.length-1)==='/') cp2=cp2.substring(0,cp2.length-1);\n    return {action:'clean',url:'https://www.facebook.com'+cp2};\n  }\n\n  var rawPath=path;\n  while(rawPath.charAt(0)==='/') rawPath=rawPath.substring(1);\n  while(rawPath.length>0&&rawPath.charAt(rawPath.length-1)==='/') rawPath=rawPath.substring(0,rawPath.length-1);\n  var seg=rawPath.split('/').filter(function(s){return s.length>0;});\n\n  if(seg.length===0) return {action:'skip',reason:'no_path'};\n\n  var first=seg[0];\n  var firstLo=first.toLowerCase();\n  var nonProfile='groups,events,watch,gaming,marketplace,pages,hashtag,search,help,settings,login,recover,dialog,sharer,plugins,ads,business,privacy,policies,legal,directory,biz,fundraisers,offers,jobs,reel,reels,stories,photo,photos,videos,live,people,share,messages,notifications,friends,home';\n  if(nonProfile.split(',').indexOf(firstLo)!==-1) return {action:'skip',reason:'non_profile_path'};\n  if(firstLo.indexOf('.php')!==-1) return {action:'skip',reason:'php_endpoint'};\n\n  if(seg.length===1) return {action:'clean',url:'https://www.facebook.com/'+first};\n\n  var profileSubs='posts,photos,videos,about,friends,reviews,reels,followers,following,likes,photos_albums,map,sports,music,movies,tv,books,check_ins,mentions,timeline,info';\n  var sec=seg[1].toLowerCase();\n  if(profileSubs.split(',').indexOf(sec)!==-1) return {action:'clean',url:'https://www.facebook.com/'+first};\n  var isNum=sec.length>0;\n  for(var j=0;j<sec.length;j++){if(sec.charAt(j)<'0'||sec.charAt(j)>'9'){isNum=false;break;}}\n  if(isNum) return {action:'clean',url:'https://www.facebook.com/'+first};\n  var validFirst=first.length>=2;\n  for(var k=0;k<first.length&&validFirst;k++){\n    var ch=first.charAt(k);\n    if(!((ch>='a'&&ch<='z')||(ch>='A'&&ch<='Z')||(ch>='0'&&ch<='9')||ch==='.'||ch==='-'||ch==='_')) validFirst=false;\n  }\n  if(validFirst) return {action:'clean',url:'https://www.facebook.com/'+first};\n\n  return {action:'skip',reason:'unrecognized_pattern'};\n}\nvar src=$('Loop Over Items').item.json;\nvar id=src.id;\nvar headers=$json.headers||{};\nvar finalUrl=headers.location||headers.Location||'';\nif(!finalUrl){\n  var body=typeof $json.body==='string'?$json.body:JSON.stringify($json.body||'');\n  var idx=body.indexOf('canonical');\n  if(idx===-1) idx=body.indexOf('og:url');\n  if(idx!==-1){\n    var hrefIdx=body.indexOf('href=',idx);\n    if(hrefIdx===-1) hrefIdx=body.indexOf('content=',idx);\n    if(hrefIdx!==-1){\n      var qStart=hrefIdx+5;\n      while(qStart<body.length&&body.charAt(qStart)!==\"'\"&&body.charAt(qStart)!=='\"') qStart++;\n      var qChar=body.charAt(qStart);\n      var start=qStart+1;\n      var end=body.indexOf(qChar,start);\n      if(end!==-1) finalUrl=body.substring(start,end);\n    }\n  }\n}\nwhile(finalUrl.indexOf('&amp;')!==-1){\n  var ai=finalUrl.indexOf('&amp;');\n  finalUrl=finalUrl.substring(0,ai)+'&'+finalUrl.substring(ai+5);\n}\nvar status='ok';\nvar cleaned='';\nif(!finalUrl){\n  status='no_redirect';\n}else if(finalUrl.indexOf('/login')!==-1||finalUrl.indexOf('checkpoint')!==-1){\n  status='login_wall';\n}else{\n  // Only save real profile links; videos, reels, groups and outside sites are left unchanged\n  var n=normalizeFb(finalUrl);\n  if(n.action==='clean') cleaned=n.url;\n  else status='not_a_profile';\n}\nvar resolved=status==='ok'&&cleaned.length>0;\n\nvar memo=$getWorkflowStaticData('global');\nmemo.unresolved=memo.unresolved||{};\nif(resolved) delete memo.unresolved[id];\nelse memo.unresolved[id]={v:src.original,at:Date.now()};\n\nreturn {json:{id:id,original:src.original,cleaned:cleaned,status:status,resolved:resolved}};\n"
+            },
+            "id": "0babb0ec-dc97-4ad6-8271-441c3b2637bc",
+            "name": "Extract & Clean",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [
+                2000,
+                -384
+            ]
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": true,
+                        "leftValue": "",
+                        "typeValidation": "strict",
+                        "version": 2
+                    },
+                    "conditions": [
+                        {
+                            "id": "r",
+                            "leftValue": "={{ $json.resolved }}",
+                            "rightValue": true,
+                            "operator": {
+                                "type": "boolean",
+                                "operation": "true",
+                                "singleValue": true
+                            }
+                        }
+                    ],
+                    "combinator": "and"
+                },
+                "options": {}
+            },
+            "id": "197d33ce-89cd-465e-8b67-7af880f6cf86",
+            "name": "Resolved?",
+            "type": "n8n-nodes-base.filter",
+            "typeVersion": 2.2,
+            "position": [
+                1584,
+                -96
+            ]
+        },
+        {
+            "parameters": {
+                "aggregate": "aggregateAllItemData",
+                "destinationFieldName": "rows",
+                "options": {}
+            },
+            "id": "e95c1a23-05de-4aac-9df3-624878d580b8",
+            "name": "Aggregate Resolved Rows",
+            "type": "n8n-nodes-base.aggregate",
+            "typeVersion": 1,
+            "position": [
+                1808,
+                -96
+            ]
+        },
+        {
+            "parameters": {
+                "workflowId": {
+                    "__rl": true,
+                    "value": "UPtUg1XVxNXScOTa",
+                    "mode": "list",
+                    "cachedResultUrl": "/workflow/UPtUg1XVxNXScOTa",
+                    "cachedResultName": "FB URL Bulk Updater (Phase 2)"
+                },
+                "workflowInputs": {
+                    "mappingMode": "defineBelow",
+                    "value": {},
+                    "matchingColumns": [],
+                    "schema": [],
+                    "attemptToConvertTypes": false,
+                    "convertFieldsToString": true
+                },
+                "options": {}
+            },
+            "id": "30b6d9f4-9a38-4c52-b9a6-c2e2f0057859",
+            "name": "Update Resolved Rows",
+            "type": "n8n-nodes-base.executeWorkflow",
+            "typeVersion": 1.2,
+            "position": [
+                2032,
+                -96
+            ]
+        },
+        {
+            "parameters": {
+                "aggregate": "aggregateAllItemData",
+                "destinationFieldName": "rows",
+                "options": {}
+            },
+            "id": "468763c9-785f-431a-841d-ae2f835d9540",
+            "name": "Aggregate Clean Rows",
+            "type": "n8n-nodes-base.aggregate",
+            "typeVersion": 1,
+            "position": [
+                1312,
+                128
+            ]
+        },
+        {
+            "parameters": {
+                "workflowId": {
+                    "__rl": true,
+                    "value": "UPtUg1XVxNXScOTa",
+                    "mode": "list",
+                    "cachedResultUrl": "/workflow/UPtUg1XVxNXScOTa",
+                    "cachedResultName": "FB URL Bulk Updater (Phase 2)"
+                },
+                "workflowInputs": {
+                    "mappingMode": "defineBelow",
+                    "value": {},
+                    "matchingColumns": [],
+                    "schema": [],
+                    "attemptToConvertTypes": false,
+                    "convertFieldsToString": true
+                },
+                "options": {}
+            },
+            "id": "3c7d835e-3755-4f85-9c8b-762c56ede14a",
+            "name": "Update Clean Rows",
+            "type": "n8n-nodes-base.executeWorkflow",
+            "typeVersion": 1.2,
+            "position": [
+                1536,
+                128
+            ]
+        }
+    ],
+    "connections": {
+        "Manual Trigger": {
+            "main": [
+                [
+                    {
+                        "node": "Fetch Users (DB)",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Daily Schedule": {
+            "main": [
+                [
+                    {
+                        "node": "Fetch Users (DB)",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Fetch Users (DB)": {
+            "main": [
+                [
+                    {
+                        "node": "Classify Links",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Classify Links": {
+            "main": [
+                [
+                    {
+                        "node": "Filter1",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Filter1": {
+            "main": [
+                [
+                    {
+                        "node": "Needs Fetch?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Needs Fetch?": {
+            "main": [
+                [
+                    {
+                        "node": "Loop Over Items",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Aggregate Clean Rows",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Loop Over Items": {
+            "main": [
+                [
+                    {
+                        "node": "Resolved?",
+                        "type": "main",
+                        "index": 0
+                    }
+                ],
+                [
+                    {
+                        "node": "Fetch (no follow)",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Fetch (no follow)": {
+            "main": [
+                [
+                    {
+                        "node": "Wait (rate limit)",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Wait (rate limit)": {
+            "main": [
+                [
+                    {
+                        "node": "Extract & Clean",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Extract & Clean": {
+            "main": [
+                [
+                    {
+                        "node": "Loop Over Items",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Resolved?": {
+            "main": [
+                [
+                    {
+                        "node": "Aggregate Resolved Rows",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Aggregate Resolved Rows": {
+            "main": [
+                [
+                    {
+                        "node": "Update Resolved Rows",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        },
+        "Aggregate Clean Rows": {
+            "main": [
+                [
+                    {
+                        "node": "Update Clean Rows",
+                        "type": "main",
+                        "index": 0
+                    }
+                ]
+            ]
+        }
+    },
+    "pinData": {
+        "Daily Schedule": [
+            {
+                "timestamp": "2026-07-22T06:00:13.008+08:00",
+                "Readable date": "July 22nd 2026, 6:00:13 am",
+                "Readable time": "6:00:13 am",
+                "Day of week": "Wednesday",
+                "Year": "2026",
+                "Month": "July",
+                "Day of month": "22",
+                "Hour": "06",
+                "Minute": "00",
+                "Second": "13",
+                "Timezone": "Asia/Manila (UTC+08:00)"
+            }
+        ]
+    },
+    "meta": {
+        "templateCredsSetupCompleted": true,
+        "instanceId": "4cc403a4c2e950b3504b7bcf03ba4a07b56850f8e3d68f3eaf4db7820d08d8d9"
+    }
+}
