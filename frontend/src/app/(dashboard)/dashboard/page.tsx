@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useOnboardingProgress, VIDEO_IDS, INSTALL_CHECKLIST, DOWNLOAD_KEYS, BASIC_VIDEO_ITEMS, ADVANCED_ITEMS, BASIC_VIDEO_YOUTUBE_IDS, ADVANCED_VIDEO_YOUTUBE_IDS, BASIC_VIDEO_ITEMS_UI, ADVANCED_ITEMS_UI, ONBOARDING_VIDEO_DURATIONS, calcVideoCountdown } from "@/components/Onboarding/useOnboardingProgress";
 import { registerWithGingerAction, getSessionUser, completeDashboardAction } from "@/app/actions/auth";
+import { isDemoGingerEmail } from "@/lib/demoAccount";
 import InlineVideoPlayer from "@/components/Onboarding/InlineVideoPlayer";
 import TrainingModuleCard, { StepVariant, DownloadRow, InstallBlock, VideoItem } from "@/components/Onboarding/TrainingModuleCard";
 import AnswerKeyPanel, { ANSWER_KEY_TASKS, ANSWER_KEY_LIBRARY_TASKS } from "@/components/Onboarding/AnswerKeyPanel";
@@ -306,6 +307,12 @@ export default function OnboardingDashboardPage() {
     });
 
     getSessionUser().then((user) => {
+      // Demo/stub account: no onboarding — send straight to Projects.
+      if (isDemoGingerEmail(user?.email)) {
+        router.replace("/project");
+        return;
+      }
+
       // Staff preview: don't load or touch the viewer's own onboarding, and skip Ginger registration
       if (new URLSearchParams(window.location.search).get("preview") === "1" && isStaff(user?.role)) {
         setIsPreview(true);
