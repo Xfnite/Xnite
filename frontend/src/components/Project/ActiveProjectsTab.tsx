@@ -415,14 +415,10 @@ export function ActiveProjectsTab({
 
 
 
-      const tokenCookie = document.cookie.split('; ').find(row => row.startsWith('ginger_access_token='));
-      const token = tokenCookie ? tokenCookie.split('=')[1] : null;
-
-      const response = await fetch(`${GINGER_BASE}/bac/mapping/annotate/training-annotate/update-user-training-status`, {
+      const response = await fetch(`/api/ginger/bac/mapping/annotate/training-annotate/update-user-training-status`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
           annotate_project_id: projectId,
@@ -535,11 +531,10 @@ export function ActiveProjectsTab({
       let totalSize = 0;
 
       do {
-        const listResponse = await fetch(`${GINGER_BASE}/bac/mapping/annotate/list-ongoing-projects-for-annotator`, {
+        const listResponse = await fetch(`/api/ginger/bac/mapping/annotate/list-ongoing-projects-for-annotator`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
           },
           body: JSON.stringify({ offset: currentOffset, size: pageSize }),
         });
@@ -575,11 +570,10 @@ export function ActiveProjectsTab({
 
       for (let i = 0; i < annotateIds.length; i += 20) {
         const chunk = annotateIds.slice(i, i + 20);
-        const statsResponse = await fetch(`${GINGER_BASE}/bac/mapping/annotate/list-projects-with-statistics`, {
+        const statsResponse = await fetch(`/api/ginger/bac/mapping/annotate/list-projects-with-statistics`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
           },
           body: JSON.stringify({ annotate_id_list: chunk }),
         });
@@ -646,11 +640,10 @@ export function ActiveProjectsTab({
         return;
       }
 
-      const response = await fetch(`${GINGER_BASE}/bac/mapping/annotate/training-annotate/list-ongoing-projects`, {
+      const response = await fetch(`/api/ginger/bac/mapping/annotate/training-annotate/list-ongoing-projects`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({ region: "phi" }),
       });
@@ -704,11 +697,10 @@ export function ActiveProjectsTab({
         return;
       }
 
-      const response = await fetch(`${GINGER_BASE}/bac/mapping/annotate/training-annotate/update-user-training-status`, {
+      const response = await fetch(`/api/ginger/bac/mapping/annotate/training-annotate/update-user-training-status`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
           annotate_project_id: projectId,
@@ -844,11 +836,10 @@ export function ActiveProjectsTab({
         return;
       }
 
-      const response = await fetch(`${GINGER_BASE}/bac/mapping/annotate/register-worktime`, {
+      const response = await fetch(`/api/ginger/bac/mapping/annotate/register-worktime`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
           annotate_id: selectedRegisterProject.annotate_id,

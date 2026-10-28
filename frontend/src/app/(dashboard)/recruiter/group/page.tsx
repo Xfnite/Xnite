@@ -39,7 +39,6 @@ import { io, Socket } from "socket.io-client";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { uploadFiles } from "@/utils/uploadthing";
 
-const GINGER_BASE = process.env.NEXT_PUBLIC_GINGER_API_URL || "https://ginger.bitmappro.com";
 const WORKTIME_PENDING_KEY = "xnite_worktime_pending_task";
 import { toast } from "sonner";
 
@@ -1076,11 +1075,10 @@ export default function MyOwnGSPage() {
         }
         setError(null);
         try {
-            const res = await fetch(`${GINGER_BASE}/bac/eam/koala/koala-group/group/detail`, {
+            const res = await fetch(`/api/ginger/bac/eam/koala/koala-group/group/detail`, {
                 method: "POST",
                 headers: {
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${token}`
+                    "Content-Type": "application/json"
                 },
                 body: JSON.stringify({ group_id: idToFetch })
             });
@@ -1254,11 +1252,10 @@ export default function MyOwnGSPage() {
             try {
                 const reloginRes = await forceGingerLoginAction();
                 if (reloginRes.success && reloginRes.token) {
-                    const retryRes = await fetch(`${GINGER_BASE}/bac/eam/koala/koala-group/group/detail`, {
+                    const retryRes = await fetch(`/api/ginger/bac/eam/koala/koala-group/group/detail`, {
                         method: "POST",
                         headers: {
-                            "Content-Type": "application/json",
-                            "Authorization": `Bearer ${reloginRes.token}`
+                            "Content-Type": "application/json"
                         },
                         body: JSON.stringify({ group_id: idToFetch })
                     });
@@ -1387,9 +1384,9 @@ export default function MyOwnGSPage() {
         setIsDownloadingWorktime(true);
         try {
             const startTask = async (token: string) => {
-                const res = await fetch(`${GINGER_BASE}/bac/mapping/annotate/performance/async_download_work_time_table`, {
+                const res = await fetch(`/api/ginger/bac/mapping/annotate/performance/async_download_work_time_table`, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ start_date: worktimeStart, end_date: endDate })
                 });
                 const text = await res.text().catch(() => "");
@@ -1454,9 +1451,9 @@ export default function MyOwnGSPage() {
             const deadline = pollStartedAt + 15 * 60 * 1000;
             while (Date.now() < deadline) {
                 await new Promise((r) => setTimeout(r, 3000));
-                const res = await fetch(`${GINGER_BASE}/bac/async_task/api_request/get_result`, {
+                const res = await fetch(`/api/ginger/bac/async_task/api_request/get_result`, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ task_id: taskId })
                 });
                 if (!res.ok) throw new Error(`Bitmap returned HTTP ${res.status}`);

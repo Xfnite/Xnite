@@ -21,7 +21,6 @@ const STATE_META: Record<string, { label: string; color: string; bg: string; bor
   reviewer_editing: { label: "Reviewer Editing", color: "text-purple-600 dark:text-purple-400", bg: "bg-purple-500/10", border: "border-purple-500/20" },
 };
 
-const GINGER_BASE = process.env.NEXT_PUBLIC_GINGER_API_URL || "https://ginger.bitmappro.com";
 
 const getStateMeta = (stateTitle: string) => {
   if (STATE_META[stateTitle]) return STATE_META[stateTitle];
@@ -84,11 +83,10 @@ export function TaskSummaryTab() {
           return;
         }
 
-        const response = await fetch(`${GINGER_BASE}/bac/mapping/annotate/list-ongoing-projects-for-annotator`, {
+        const response = await fetch(`/api/ginger/bac/mapping/annotate/list-ongoing-projects-for-annotator`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
           },
           body: JSON.stringify({}),
         });
@@ -143,11 +141,10 @@ export function TaskSummaryTab() {
           return;
         }
 
-        const response = await fetch(`${GINGER_BASE}/bac/mapping/annotate/detail-annotate-statistics`, {
+        const response = await fetch(`/api/ginger/bac/mapping/annotate/detail-annotate-statistics`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
           },
           body: JSON.stringify({ annotate_id: selectedProjectId }),
         });

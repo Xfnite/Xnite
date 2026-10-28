@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { getSystemSetting } from "@/app/actions/settings";
 import { getUserSidebarBanner, updateUserSidebarBanner, getLabelerRecruitCount, getInnerCouncilAccessAction } from "@/app/actions/user";
 import { GATES, isStaff, isOldLabeler, isApplicant, canEarnInnerCouncil } from "@/config/permissions";
+import { isDemoGingerEmail } from "@/lib/demoAccount";
 
 interface SidebarProps {
   isOpen?: boolean;
@@ -369,7 +370,8 @@ export default function Sidebar({
         </div>
 
         <nav className="space-y-1 flex flex-col px-4 flex-1 pb-1">
-          {/* Dashboard - always visible */}
+          {/* Onboarding - hidden for the demo account */}
+          {!isDemoGingerEmail(email) && (
           <Link
             href="/dashboard"
             onClick={onClose}
@@ -393,6 +395,7 @@ export default function Sidebar({
             </svg>
             Onboarding
           </Link>
+          )}
 
           {/* Separator */}
           <div className="my-1.5 border-t border-black/5 dark:border-white/5" />

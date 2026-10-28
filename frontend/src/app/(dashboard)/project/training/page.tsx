@@ -48,14 +48,10 @@ export default function TrainingPage() {
 
 
 
-      const tokenCookie = document.cookie.split('; ').find(row => row.startsWith('ginger_access_token='));
-      const token = tokenCookie ? tokenCookie.split('=')[1] : null;
-
-      const response = await fetch(`${GINGER_BASE}/bac/mapping/annotate/training-annotate/update-user-training-status`, {
+      const response = await fetch(`/api/ginger/bac/mapping/annotate/training-annotate/update-user-training-status`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
           annotate_project_id: projectId,
@@ -115,11 +111,10 @@ export default function TrainingPage() {
         return;
       }
 
-      const response = await fetch(`${GINGER_BASE}/bac/mapping/annotate/training-annotate/list-ongoing-projects`, {
+      const response = await fetch(`/api/ginger/bac/mapping/annotate/training-annotate/list-ongoing-projects`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({ region: "phi" }),
       });
@@ -171,11 +166,10 @@ export default function TrainingPage() {
         return;
       }
 
-      const response = await fetch(`${GINGER_BASE}/bac/mapping/annotate/training-annotate/update-user-training-status`, {
+      const response = await fetch(`/api/ginger/bac/mapping/annotate/training-annotate/update-user-training-status`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
           annotate_project_id: projectId,

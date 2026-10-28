@@ -10,6 +10,7 @@ import { isStaff } from "@/config/permissions";
 import { getStaffUser } from "@/lib/authGuard";
 import { redis, isRedisReady } from "@/lib/redis";
 import { checkTrainingPassedFromList } from "@/lib/trainingStatus";
+import { isDemoGingerEmail } from "@/lib/gingerDemo";
 import { toUserFacingError } from "@/lib/userFacingError";
 import { findReferalFor } from "@/lib/referrers";
 
@@ -1110,6 +1111,9 @@ export async function checkStandardBuildingPassedAction(clientToken?: string): P
     const sessionToken = cookieStore.get("xnite_session")?.value;
     const email = sessionToken ? await verifySessionToken(sessionToken) : null;
     if (!email) return false;
+
+    // Demo/stub account: treat as passed without any Ginger call.
+    if (isDemoGingerEmail(email)) return true;
 
     const user = await prisma.user.findUnique({
       where: { email },

@@ -7,7 +7,6 @@ import { getSessionUser, forceGingerLoginAction } from "@/app/actions/auth";
 import { getSystemSetting } from "@/app/actions/settings";
 import { cacheGingerDataAction, getCachedGingerDataAction, getUserSoftwareAccountsFromDbAction, getUserTrainingsFromDbAction } from "@/app/actions/project";
 import { toast } from "sonner";
-const GINGER_BASE = process.env.NEXT_PUBLIC_GINGER_API_URL || "https://ginger.bitmappro.com";
 
 export default function AccountPage() {
   const [activeTab, setActiveTab] = useState<string>("");
@@ -123,11 +122,10 @@ export default function AccountPage() {
         const trainingsPromise = getSessionAndToken().then(async (token) => {
           if (!token) return null;
           try {
-            const trResponse = await fetch(`${GINGER_BASE}/bac/mapping/annotate/training-annotate/list-ongoing-projects`, {
+            const trResponse = await fetch(`/api/ginger/bac/mapping/annotate/training-annotate/list-ongoing-projects`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`,
               },
               body: JSON.stringify({ region: "phi" }),
             });
