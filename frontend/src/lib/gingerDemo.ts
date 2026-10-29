@@ -111,7 +111,7 @@ export async function gingerDemoResponse(endpoint: string, email: string, body: 
       const payload = parseBody(body);
       const pid = payload.annotate_project_id;
       const next = Number(payload.is_active);
-      const target = state.trainings.find((t) => t.annotate_project_id === pid || t.annotate_sub_project_id === pid);
+      const target = state.trainings.find((t) => Number(t.annotate_project_id) === Number(pid) || Number(t.annotate_sub_project_id) === Number(pid));
       if (target) {
         if (next === 1) {
           // Only one training may run at a time: pause the others (never the

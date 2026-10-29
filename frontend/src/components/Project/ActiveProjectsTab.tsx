@@ -675,10 +675,15 @@ export function ActiveProjectsTab({
     }
   };
 
-  const toggleTrainingStatus = async (training: any) => {
+  const toggleTrainingStatus = async (
+    training: any,
+    forcedAction?: 'pause' | 'register' | 'reopen'
+  ) => {
     let nextActive = 0;
-    if (training.is_active !== undefined) {
-      nextActive = training.is_active === 1 ? 0 : 1;
+    if (forcedAction) {
+      nextActive = forcedAction === 'pause' ? 0 : 1;
+    } else if (training.is_active !== undefined) {
+      nextActive = Number(training.is_active) === 1 ? 0 : 1;
     } else {
       nextActive = 1;
     }
@@ -723,7 +728,7 @@ export function ActiveProjectsTab({
           const isTransportation = name.includes("transportation") || name.includes("transport");
           const isRoof = name.includes("roof");
 
-          if (nextActive === 1) {
+          if (nextActive === 1 && forcedAction !== 'pause') {
             setSuccessModalData({ type: 'training', isOpen: true });
             if (isLandCover) {
               setWalkthroughStep(-1);
@@ -1388,7 +1393,12 @@ export function ActiveProjectsTab({
                                 {!isStandardBuilding && (
                                   <button
                                     onClick={() => {
-                                      const doToggle = () => toggleTrainingStatus(training);
+                                      const actionType: 'pause' | 'register' | 'reopen' = isOngoing
+                                        ? 'pause'
+                                        : isUnregistered
+                                          ? 'register'
+                                          : 'reopen';
+                                      const doToggle = () => toggleTrainingStatus(training, actionType);
                                       const isRegisterBtn = !isOngoing && isUnregistered;
 
                                       if (isLandCover && !hasClickedLandCover && isRegisterBtn) {
@@ -1584,7 +1594,12 @@ export function ActiveProjectsTab({
                           {!isStandardBuilding && (
                             <button
                               onClick={() => {
-                                const doToggle = () => toggleTrainingStatus(training);
+                                const actionType: 'pause' | 'register' | 'reopen' = isOngoing
+                                  ? 'pause'
+                                  : isUnregistered
+                                    ? 'register'
+                                    : 'reopen';
+                                const doToggle = () => toggleTrainingStatus(training, actionType);
                                 const isRegisterBtn = !isOngoing && isUnregistered;
 
                                 if (isLandCover && !hasClickedLandCover && isRegisterBtn) {
