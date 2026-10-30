@@ -8,6 +8,7 @@ import { verifySessionToken } from "@/lib/jwt";
 import { verifyCookieValue } from "@/lib/signedCookie";
 import { listSignupReferrers } from "@/lib/referrers";
 import { isApplicant } from "@/config/permissions";
+import { splitFullName } from "@/lib/nameUtils";
 
 export const dynamic = "force-dynamic";
 
@@ -59,12 +60,12 @@ async function ReferrerSelectContainer() {
 export default async function RegisterPage() {
   const cookieStore = await cookies();
   const fullName = cookieStore.get("signup_name")?.value || "";
-  let initialFirstName = "";
-  let initialLastName = "";
-  if (fullName) {
-    const parts = fullName.split(" ");
-    initialFirstName = parts[0] || "";
-    initialLastName = parts.length > 1 ? parts.slice(1).join(" ") : "";
+  let initialFirstName = cookieStore.get("signup_first_name")?.value || "";
+  let initialLastName = cookieStore.get("signup_last_name")?.value || "";
+  if ((!initialFirstName || !initialLastName) && fullName) {
+    const split = splitFullName(fullName);
+    if (!initialFirstName) initialFirstName = split.firstName;
+    if (!initialLastName) initialLastName = split.lastName;
   }
   let initialStep: "register" | "complete-profile" = fullName ? "complete-profile" : "register";
 

@@ -8,6 +8,7 @@ import { getSessionUser } from "@/app/actions/auth";
 import { decodeSessionEmailUnsafe } from "@/lib/decodeSessionEmail";
 import { QrCode, Upload, ExternalLink, X as XIcon } from "lucide-react";
 import { toUserFacingError } from "@/lib/userFacingError";
+import { splitFullName } from "@/lib/nameUtils";
 
 const PAYMENT_PROVIDERS = [
   {
@@ -231,9 +232,9 @@ export default function PaymentMethodPage() {
       if (resolvedLastName) {
         setUserLastName(resolvedLastName);
       } else if (user?.name) {
-        const parts = user.name.trim().split(" ");
-        if (parts.length > 1) {
-          setUserLastName(parts[parts.length - 1]);
+        const split = splitFullName(user.name);
+        if (split.lastName) {
+          setUserLastName(split.lastName);
         }
       }
       

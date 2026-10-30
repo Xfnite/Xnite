@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { verifySessionToken } from "@/lib/jwt";
 import { isStaff, getNormalizedRole } from "@/config/permissions";
 import { generateUniqueCredentials } from "@/lib/generateUniqueCredentials";
+import { splitFullName } from "@/lib/nameUtils";
 import {
   ACTIVATION_MAX_BATCH, extractEmailCandidates, ownedGroupIds, canActivate, groupStaffNames, needsNewGingerAccount,
   type ActivationGroup, type ActivationTarget,
@@ -132,9 +133,9 @@ export async function activateUsersAction(lines: string[]): Promise<
 
     const resets: { user: (typeof users)[number]; creds: { gingerUsername: string; gingerEmail: string; password: string } }[] = [];
     for (const u of toReset) {
-      const nameParts = (u.name || u.email.split("@")[0]).split(" ");
-      const firstName = u.firstName || nameParts[0] || "User";
-      const lastName = u.lastName || nameParts.slice(1).join(" ") || "User";
+      const split = splitFullName(u.name || u.email.split("@")[0]);
+      const firstName = u.firstName || split.firstName || "User";
+      const lastName = u.lastName || split.lastName || "User";
       resets.push({ user: u, creds: await generateUniqueCredentials(u.referer?.sitename || "XFd_", firstName, lastName, u.email) });
     }
 

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { createPortal } from "react-dom";
 import { getSessionUser } from "@/app/actions/auth";
+import { splitFullName } from "@/lib/nameUtils";
 import { driver } from "driver.js";
 import "driver.js/dist/driver.css";
 
@@ -124,9 +125,9 @@ export default function WalletWalkthroughProvider({ children }: { children: Reac
         const paymentLastName = paymentRes?.data?.lastName || "";
         let resolvedUserLastName = user?.lastName || (user as any)?.db_lastName || "";
         if (!resolvedUserLastName && user?.name) {
-          const parts = user.name.trim().split(" ");
-          if (parts.length > 1) {
-            resolvedUserLastName = parts[parts.length - 1];
+          const split = splitFullName(user.name);
+          if (split.lastName) {
+            resolvedUserLastName = split.lastName;
           }
         }
 

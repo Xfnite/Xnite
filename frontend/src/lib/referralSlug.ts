@@ -1,3 +1,5 @@
+import { splitFullName } from "@/lib/nameUtils";
+
 // Short referral codes like "cedrickr" (first name + last initial), used in
 // join.xfnite.cloud/<slug> links. Created by getReferralSlugAction, read by /r/[code].
 
@@ -30,9 +32,9 @@ export function referralSlugBase(
   let first = clean(firstName);
   let lastInitial = clean(lastName).charAt(0);
   if (!first) {
-    const parts = (name ?? "").trim().split(/\s+/);
-    first = clean(parts[0]);
-    if (!lastInitial && parts.length > 1) lastInitial = clean(parts[parts.length - 1]).charAt(0);
+    const split = splitFullName(name);
+    first = clean(split.firstName);
+    if (!lastInitial && split.lastName) lastInitial = clean(split.lastName).charAt(0);
   }
   return (first.slice(0, 20) || "xfniter") + lastInitial;
 }

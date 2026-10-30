@@ -13,6 +13,7 @@ import { checkTrainingPassedFromList } from "@/lib/trainingStatus";
 import { isDemoGingerEmail } from "@/lib/gingerDemo";
 import { toUserFacingError } from "@/lib/userFacingError";
 import { findReferalFor } from "@/lib/referrers";
+import { splitFullName } from "@/lib/nameUtils";
 
 const GINGER_BASE = process.env.NEXT_PUBLIC_GINGER_API_URL || "https://ginger.bitmappro.com";
 const GINGER_LOGIN_ENDPOINT = `${GINGER_BASE}/bac/login`;
@@ -298,6 +299,8 @@ export async function logoutAction() {
     cookieStore.delete("pre_course_progress");
     cookieStore.delete("onboarding_email");
     cookieStore.delete("onboarding_name");
+    cookieStore.delete("signup_first_name");
+    cookieStore.delete("signup_last_name");
 
     return { success: true, data: gingerData };
   } catch (err) {
@@ -445,13 +448,12 @@ export async function registerAction(data: {
     const normalizedReferrer = referalRecord?.email || pickedReferrer;
     const sitename = referalRecord?.sitename || "XFd_";
 
-    let finalFirstName = inputFirstName;
-    let finalLastName = inputLastName;
-    if (!finalFirstName && name) {
-      finalFirstName = name.split(" ")[0];
-    }
-    if (!finalLastName && name) {
-      finalLastName = name.split(" ").slice(1).join(" ") || "User";
+    let finalFirstName = inputFirstName?.trim();
+    let finalLastName = inputLastName?.trim();
+    if ((!finalFirstName || !finalLastName) && name) {
+      const split = splitFullName(name);
+      if (!finalFirstName) finalFirstName = split.firstName;
+      if (!finalLastName) finalLastName = split.lastName;
     }
     if (!finalFirstName) finalFirstName = email.split("@")[0] || "User";
     if (!finalLastName) finalLastName = "User";
@@ -474,8 +476,8 @@ export async function registerAction(data: {
       const payload = {
         email,
         name: name || gingerUsername,
-        firstName: inputFirstName,
-        lastName: inputLastName,
+        firstName: finalFirstName,
+        lastName: finalLastName,
         gingerEmail,
         gingerUsername,
         gingerPassword: password,
@@ -578,8 +580,16 @@ export async function completeProfileAction(data: {
       return { success: false, error: "Invalid email, please use other email" };
     }
 
-    let finalFirstName = inputFirstName || name.split(" ")[0] || "User";
-    let finalLastName = inputLastName || name.split(" ").slice(1).join(" ") || "User";
+    let finalFirstName = inputFirstName?.trim();
+    let finalLastName = inputLastName?.trim();
+
+    if ((!finalFirstName || !finalLastName) && name) {
+      const split = splitFullName(name);
+      if (!finalFirstName) finalFirstName = split.firstName;
+      if (!finalLastName) finalLastName = split.lastName;
+    }
+    if (!finalFirstName) finalFirstName = "User";
+    if (!finalLastName) finalLastName = "User";
 
     let generatedCreds;
     try {
@@ -600,9 +610,9 @@ export async function completeProfileAction(data: {
 
     const payload = {
       email,
-      name: name || "User",
-      firstName: inputFirstName,
-      lastName: inputLastName,
+      name: name || `${finalFirstName} ${finalLastName}`.trim() || "User",
+      firstName: finalFirstName,
+      lastName: finalLastName,
       gingerEmail: generatedGingerEmail,
       gingerUsername: generatedGingerUsername,
       gingerPassword: generatedPassword,
@@ -641,6 +651,8 @@ export async function completeProfileAction(data: {
     // Delete any existing session since they are not fully registered yet
     cookieStore.delete("xnite_session");
     cookieStore.delete("signup_name");
+    cookieStore.delete("signup_first_name");
+    cookieStore.delete("signup_last_name");
     cookieStore.delete("signup_email");
     cookieStore.delete("pre_course_completed");
 
@@ -926,9 +938,9 @@ export async function registerWithGingerAction() {
         const canRetry = /system error|username|duplicate|already|exist/i.test(lastError);
         if (!canRetry) break;
 
-        const nameParts = (user.name || user.email.split("@")[0]).split(" ");
-        const retryFirstName = nameParts[0] || "User";
-        const retryLastName = nameParts.slice(1).join(" ") || "User";
+        const split = splitFullName(user.name || user.email.split("@")[0]);
+        const retryFirstName = user.firstName || split.firstName || "User";
+        const retryLastName = user.lastName || split.lastName || "User";
 
         let regenerated;
         try {
@@ -1996,6 +2008,8 @@ export async function deleteAccountAction(password: string) {
     cookieStore.delete("pre_course_progress");
     cookieStore.delete("onboarding_email");
     cookieStore.delete("onboarding_name");
+    cookieStore.delete("signup_first_name");
+    cookieStore.delete("signup_last_name");
 
     return { success: true };
   } catch (err: any) {

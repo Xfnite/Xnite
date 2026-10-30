@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { signSessionToken } from "@/lib/jwt";
 import { signCookieValue } from "@/lib/signedCookie";
 import { withRateLimit } from "@/lib/rateLimit";
+import { splitFullName } from "@/lib/nameUtils";
 
 export const GET = withRateLimit(async (request: NextRequest) => {
   const { searchParams } = new URL(request.url);
@@ -60,6 +61,15 @@ export const GET = withRateLimit(async (request: NextRequest) => {
       const name = userData.name || userData.email?.split('@')[0] || "Unknown";
       const email = userData.email ? userData.email.toLowerCase() : "Unknown";
 
+      let firstName = (userData.given_name || "").trim();
+      let lastName = (userData.family_name || "").trim();
+
+      if ((!firstName || !lastName) && name) {
+        const split = splitFullName(name);
+        if (!firstName) firstName = split.firstName;
+        if (!lastName) lastName = split.lastName;
+      }
+
       const state = searchParams.get("state");
 
       // If they are logging in but don't have an account, check GingerGX first
@@ -85,6 +95,8 @@ export const GET = withRateLimit(async (request: NextRequest) => {
       if (state === "signup") {
         const response = NextResponse.redirect(`${origin}/register?step=complete-profile`);
         response.cookies.set("signup_name", name, { path: "/", maxAge: 3600 });
+        if (firstName) response.cookies.set("signup_first_name", firstName, { path: "/", maxAge: 3600 });
+        if (lastName) response.cookies.set("signup_last_name", lastName, { path: "/", maxAge: 3600 });
         response.cookies.set("signup_email", await signCookieValue("signup_email", email, 3600), { path: "/", maxAge: 3600 });
         return response;
       }
@@ -133,11 +145,15 @@ export const GET = withRateLimit(async (request: NextRequest) => {
           // User is in Ginger but not in our DB → they need to link & complete their profile
           const response = NextResponse.redirect(`${origin}/register`);
           response.cookies.set("signup_name", name, { path: "/", maxAge: 3600 });
+          if (firstName) response.cookies.set("signup_first_name", firstName, { path: "/", maxAge: 3600 });
+          if (lastName) response.cookies.set("signup_last_name", lastName, { path: "/", maxAge: 3600 });
           response.cookies.set("signup_email", await signCookieValue("signup_email", email, 3600), { path: "/", maxAge: 3600 });
           return response;
         } else {
           const response = NextResponse.redirect(`${origin}/register`);
           response.cookies.set("signup_name", name, { path: "/", maxAge: 3600 });
+          if (firstName) response.cookies.set("signup_first_name", firstName, { path: "/", maxAge: 3600 });
+          if (lastName) response.cookies.set("signup_last_name", lastName, { path: "/", maxAge: 3600 });
           response.cookies.set("signup_email", await signCookieValue("signup_email", email, 3600), { path: "/", maxAge: 3600 });
           return response;
         }
@@ -164,6 +180,8 @@ export const GET = withRateLimit(async (request: NextRequest) => {
 
       // Ensure the user's Google name and email are preserved for the profile completion step
       response.cookies.set("signup_name", name, { path: "/", maxAge: 3600 });
+      if (firstName) response.cookies.set("signup_first_name", firstName, { path: "/", maxAge: 3600 });
+      if (lastName) response.cookies.set("signup_last_name", lastName, { path: "/", maxAge: 3600 });
       response.cookies.set("signup_email", await signCookieValue("signup_email", email, 3600), { path: "/", maxAge: 3600 });
 
       const gingerEmail = existingUser.gingerEmail || existingUser.gingerUsername || existingUser.email;
