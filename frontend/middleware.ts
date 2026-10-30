@@ -153,6 +153,10 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  if (pathname === "/registration" || pathname.startsWith("/registration/")) {
+    return NextResponse.redirect(new URL("/register", request.url));
+  }
+
   if (pathname.startsWith("/_next") || pathname === "/favicon.ico") {
     return NextResponse.next();
   }

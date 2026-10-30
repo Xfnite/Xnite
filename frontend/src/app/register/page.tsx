@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import ReferrerSelect from "@/components/ReferrerSelect";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -59,6 +60,43 @@ async function ReferrerSelectContainer() {
 
 export default async function RegisterPage() {
   const cookieStore = await cookies();
+  const signupEmail = await verifyCookieValue("signup_email", cookieStore.get("signup_email")?.value);
+  const onboardingEmail = await verifyCookieValue("onboarding_email", cookieStore.get("onboarding_email")?.value);
+  const sessionToken = cookieStore.get("xnite_session")?.value;
+  const sessionEmail = sessionToken ? await verifySessionToken(sessionToken) : null;
+
+  // Direct URL access prevention:
+  // Registration can only be accessed after authenticating via "Continue with Google".
+  // Anyone navigating directly to /register without a Google signup session, onboarding session,
+  // or active session is redirected to /login.
+  if (!signupEmail && !onboardingEmail && !sessionEmail) {
+    redirect("/login");
+  }
+
+  let isExistingUser = false;
+  const checkEmail = (sessionEmail || signupEmail || onboardingEmail)?.toLowerCase();
+  let existingUser = null;
+
+  if (checkEmail) {
+    existingUser = await prisma.user.findUnique({
+      where: { email: checkEmail },
+      select: { id: true, hasCompletedPreCourse: true, firstName: true, phone: true },
+    });
+    if (existingUser) {
+      isExistingUser = true;
+    }
+  }
+
+  // Already completed pre-course users are redirected to dashboard
+  if (existingUser?.hasCompletedPreCourse) {
+    redirect("/dashboard");
+  }
+
+  // If registration is disabled and they are not an existing user, redirect to login with error
+  if (process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true" && !isExistingUser) {
+    redirect("/login?error=Registration%20is%20currently%20disabled.");
+  }
+
   const fullName = cookieStore.get("signup_name")?.value || "";
   let initialFirstName = cookieStore.get("signup_first_name")?.value || "";
   let initialLastName = cookieStore.get("signup_last_name")?.value || "";
@@ -67,33 +105,10 @@ export default async function RegisterPage() {
     if (!initialFirstName) initialFirstName = split.firstName;
     if (!initialLastName) initialLastName = split.lastName;
   }
-  let initialStep: "register" | "complete-profile" = fullName ? "complete-profile" : "register";
 
-  let isExistingUser = false;
-  const signupEmail = await verifyCookieValue("signup_email", cookieStore.get("signup_email")?.value);
-  const sessionToken = cookieStore.get("xnite_session")?.value;
-
-  let checkEmail = signupEmail?.toLowerCase();
-  if (!checkEmail && sessionToken) {
-    const sessionEmail = await verifySessionToken(sessionToken);
-    if (sessionEmail) {
-      checkEmail = sessionEmail.toLowerCase();
-    }
-  }
-
-  if (checkEmail) {
-    const user = await prisma.user.findUnique({
-      where: { email: checkEmail },
-      select: { id: true },
-    });
-    if (user) {
-      isExistingUser = true;
-    }
-  }
-
-  // If registration is disabled and they are NOT an existing user, force step to "register"
-  if (process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true" && !isExistingUser) {
-    initialStep = "register";
+  let initialStep: "register" | "complete-profile" | "welcome" | "pre-course" = "complete-profile";
+  if (onboardingEmail || (existingUser && existingUser.firstName && existingUser.phone)) {
+    initialStep = "welcome";
   }
 
   return (

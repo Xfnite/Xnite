@@ -15,6 +15,20 @@ const nextConfig: NextConfig = {
     ],
   },
   allowedDevOrigins: ["192.168.1.65", "192.168.1.55", "192.168.1.25"],
+  async redirects() {
+    return [
+      {
+        source: "/registration",
+        destination: "/register",
+        permanent: false,
+      },
+      {
+        source: "/registration/:path*",
+        destination: "/register",
+        permanent: false,
+      },
+    ];
+  },
   turbopack: {
     root: path.resolve(import.meta.dirname || '.', '..'),
   },

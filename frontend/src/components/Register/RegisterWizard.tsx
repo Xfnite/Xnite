@@ -10,7 +10,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { useTheme } from "@/components/ThemeProvider";
 
 interface RegisterWizardProps {
-  initialStep: "register" | "complete-profile";
+  initialStep: "register" | "complete-profile" | "welcome" | "pre-course";
   initialFirstName?: string;
   initialLastName?: string;
   isExistingUser?: boolean;
@@ -29,6 +29,11 @@ export default function RegisterWizard({
   const searchParams = useSearchParams();
   const stepParam = searchParams.get("step") as "register" | "complete-profile" | "welcome" | "pre-course" | null;
   let step = stepParam || initialStep;
+
+  // Registration form is only accessible via "Continue with Google"
+  if (step === "register" && process.env.NEXT_PUBLIC_ENABLE_REGISTRATION === "true") {
+    step = "complete-profile";
+  }
 
   // Guard step parameter bypass if registration is disabled and user is not an existing user
   if (process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true" && !isExistingUser) {
@@ -59,6 +64,11 @@ export default function RegisterWizard({
         document.cookie = "pending_signup_payload=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
         
         router.replace("/login");
+      }
+
+      if (stepParam === "register" && process.env.NEXT_PUBLIC_ENABLE_REGISTRATION === "true") {
+        router.replace("/login");
+        return;
       }
 
       // Set initial history state URL if no step parameter is present
