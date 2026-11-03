@@ -87,9 +87,9 @@ export default async function RegisterPage() {
     }
   }
 
-  // Already completed pre-course users are redirected to dashboard
+  // Already completed pre-course users are redirected to dashboard via sync route (ensuring cookies are healed)
   if (existingUser?.hasCompletedPreCourse) {
-    redirect("/dashboard");
+    redirect("/api/auth/sync-pre-course");
   }
 
   // If registration is disabled and they are not an existing user, redirect to login with error

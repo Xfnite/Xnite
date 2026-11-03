@@ -110,11 +110,12 @@ export async function loginAction(formData: { email: string; password: string })
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       path: "/",
+      maxAge: 60 * 60 * 24 * 365,
     });
 
     cookieStore.set({
       name: "xnite_session",
-      value: await signSessionToken(user.email),
+      value: await signSessionToken(user.email, hasCompletedPreCourse),
       httpOnly: false,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
@@ -726,12 +727,13 @@ export async function completePreCourseAction() {
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       path: "/",
+      maxAge: 60 * 60 * 24 * 365,
     });
 
     if (isFromOnboarding) {
       cookieStore.set({
         name: "xnite_session",
-        value: await signSessionToken(email),
+        value: await signSessionToken(email, true),
         httpOnly: false,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
@@ -815,10 +817,10 @@ export async function registerWithGingerAction() {
           }
         }
 
-        // Set xnite_session
+        // Set xnite_session (pending pre-course)
         cookieStore.set({
           name: "xnite_session",
-          value: await signSessionToken(email),
+          value: await signSessionToken(email, false),
           httpOnly: false,
           secure: process.env.NODE_ENV === "production",
           sameSite: "lax",

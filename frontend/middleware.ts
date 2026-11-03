@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { verifySessionToken } from "@/lib/jwt";
+import { verifySessionToken, verifySessionPayload } from "@/lib/jwt";
 
 const PROTECTED_PREFIXES = ["/dashboard", "/project", "/account", "/wallet"];
 const PUBLIC_PATHS = ["/", "/login", "/register", "/privacy", "/terms"];
@@ -162,15 +162,21 @@ export async function middleware(request: NextRequest) {
   }
 
   const sessionToken = request.cookies.get("xnite_session")?.value;
-  const isAuthenticated = sessionToken ? !!(await verifySessionToken(sessionToken)) : false;
-  const preCourseCompleted = request.cookies.get("pre_course_completed")?.value === "true";
-  const hasProgress = request.cookies.has("pre_course_progress");
+  const session = sessionToken ? await verifySessionPayload(sessionToken) : null;
+  const isAuthenticated = !!session;
+  const preCourseCompletedCookie = request.cookies.get("pre_course_completed")?.value;
 
   if (isProtectedPath(pathname)) {
     if (!isAuthenticated) {
       return NextResponse.redirect(new URL("/login", request.url));
     }
-    if (!preCourseCompleted) {
+    // Only redirect if explicitly marked pending/incomplete:
+    // If the token explicitly has hasCompletedPreCourse === false, or the cookie is explicitly "false".
+    // If missing/undefined (e.g. mobile browser purged session cookie or legacy token), do not block.
+    const isPreCoursePending =
+      session.hasCompletedPreCourse === false || preCourseCompletedCookie === "false";
+
+    if (isPreCoursePending) {
       return NextResponse.redirect(new URL("/register", request.url));
     }
   }

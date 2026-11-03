@@ -170,7 +170,7 @@ export const GET = withRateLimit(async (request: NextRequest) => {
       }
       const response = NextResponse.redirect(`${origin}${redirectPath}`);
 
-      response.cookies.set("xnite_session", await signSessionToken(existingUser.email), {
+      response.cookies.set("xnite_session", await signSessionToken(existingUser.email, existingUser.hasCompletedPreCourse), {
         httpOnly: false,
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
@@ -220,6 +220,7 @@ export const GET = withRateLimit(async (request: NextRequest) => {
         secure: process.env.NODE_ENV === "production",
         sameSite: "lax",
         path: "/",
+        maxAge: 60 * 60 * 24 * 365,
       });
 
       // Update last login timestamp and status
