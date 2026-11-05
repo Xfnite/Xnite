@@ -753,6 +753,8 @@ export async function getUserSoftwareAccountsFromDbAction() {
         labelerId: true,
         labelerPassword: true,
         trainings: true,
+        group_id: true,
+        team_id: true,
       }
     });
 

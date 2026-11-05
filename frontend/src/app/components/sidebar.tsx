@@ -565,7 +565,7 @@ export default function Sidebar({
               {/* Recruiter - visible to staff and labelers who earned Inner Council */}
               {(isRecruiter || hasEarnedInnerCouncil) && (
                 <Link
-                  href="/recruiter/ranking"
+                  href={hasEarnedInnerCouncil && !isRecruiter ? "/recruiter/recruits" : "/recruiter/ranking"}
                   onClick={onClose}
                   className={`flex items-center px-4 py-2.5 text-sm font-medium transition-colors rounded-xl ${pathname.startsWith("/recruiter")
                     ? "bg-black/5 dark:bg-[#1B263B] text-[#1F7A1F] dark:text-[#55f761] shadow-sm"

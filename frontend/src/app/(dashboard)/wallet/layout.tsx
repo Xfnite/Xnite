@@ -3,9 +3,9 @@
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, X, Wallet, Lock, Trophy, Gem, Users } from "lucide-react";
+import { Menu, X, Wallet, Lock, Trophy, Gem, Users, UserPlus } from "lucide-react";
 import { getSessionUser } from "@/app/actions/auth";
-import { isGamificationPreviewVisible } from "@/config/permissions";
+import { isGamificationPreviewVisible, isLabelerOrOldLabeler } from "@/config/permissions";
 
 export default function EarningsLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -18,6 +18,7 @@ export default function EarningsLayout({ children }: { children: React.ReactNode
   const tabs = [
     { name: "Overview", href: "/wallet", exact: true },
     { name: "Payment Method", href: "/wallet/payment-method", exact: false },
+
   ];
 
   // Load from local storage on mount to persist earnings across refreshes
@@ -65,6 +66,11 @@ export default function EarningsLayout({ children }: { children: React.ReactNode
       label: "Team Payout",
       href: "/wallet/team",
       icon: <Users className="w-[18px] h-[18px]" />,
+    }] : []),
+    ...(isLabelerOrOldLabeler(userRole) ? [{
+      label: "Referral Bonus",
+      href: "/wallet/referral-bonus",
+      icon: <UserPlus className="w-[18px] h-[18px]" />,
     }] : []),
     ...(isAdmin ? [{
       label: "Restrict",
@@ -210,7 +216,9 @@ export default function EarningsLayout({ children }: { children: React.ReactNode
         <div className="space-y-6 lg:space-y-10 w-full max-w-[1400px] mx-auto pt-4 pb-12">
           <section>
             <h1 className="text-2xl lg:text-3xl font-bold tracking-tight text-[#0D1B2A] dark:text-white mb-1">
-              {pathname.startsWith("/wallet/loyalty-points")
+              {pathname.startsWith("/wallet/referral-bonus")
+                ? "Referral Bonus"
+                : pathname.startsWith("/wallet/loyalty-points")
                 ? "Loyalty Points"
                 : pathname.startsWith("/wallet/xgp")
                 ? "Xfnite GP"
@@ -219,7 +227,9 @@ export default function EarningsLayout({ children }: { children: React.ReactNode
                 : "Earnings & Payments"}
             </h1>
             <p className="text-sm text-[#2F3E46] dark:text-white/60">
-              {pathname.startsWith("/wallet/loyalty-points")
+              {pathname.startsWith("/wallet/referral-bonus")
+                ? "Track your referral bonuses and earnings from recruited team members."
+                : pathname.startsWith("/wallet/loyalty-points")
                 ? "Earn LXP through daily quests and track your rewards history."
                 : pathname.startsWith("/wallet/xgp")
                 ? "Track the monthly XGP pool and manage your withdrawable balance."

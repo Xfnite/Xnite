@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { withRateLimit } from "@/lib/rateLimit";
 import { signCookieValue } from "@/lib/signedCookie";
 import { splitFullName } from "@/lib/nameUtils";
+import { isApplicant } from "@/config/permissions";
 
 export const GET = withRateLimit(async (request: NextRequest) => {
   const { searchParams } = new URL(request.url);
@@ -55,7 +56,8 @@ export const GET = withRateLimit(async (request: NextRequest) => {
       const state = searchParams.get("state");
 
       const existingUser = await prisma.user.findUnique({ where: { email } });
-      if (existingUser && existingUser.status === "Deactivated") {
+      const isExistingUserApplicant = existingUser ? isApplicant(existingUser.role) : false;
+      if (existingUser && (existingUser.status === "Deactivated" || existingUser.status?.toLowerCase() === "inactive") && !isExistingUserApplicant) {
         return NextResponse.redirect(`${origin}/login?error=AccountDoesNotExist`);
       }
 

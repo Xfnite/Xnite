@@ -68,6 +68,8 @@ model User {
   projects                         Project[]
   trainings                        Training?
   profileChangeRequests            ProfileChangeRequest[]
+  referralBonuses                  ReferralBonus[]
+  referralWithdrawals              ReferralWithdrawal[]
   referer                          Referal?               @relation(fields: [refererEmail], references: [email])
 
   @@index([refererEmail])
@@ -464,4 +466,58 @@ model FaqQuestionArchive {
   @@index([chatType, createdAt])
   @@index([askedByEmail])
   @@map("faq_question_archive")
+}
+
+
+model ReferralBonus {
+  id             String   @id @default(dbgenerated("gen_random_uuid()"))
+  userId         String?
+  gingerUsername String?
+  user_name      String?
+  amount         Float    @default(0)
+  share          Float?
+  cutoff         String   @default("Current Cutoff")
+  status         String   @default("Active")
+  recruiterEmail String?
+  recruitEmail   String?
+  source         String?
+  note           String?
+  withdrawalId   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user           User?               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  withdrawal     ReferralWithdrawal? @relation(fields: [withdrawalId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([gingerUsername])
+  @@index([user_name])
+  @@index([recruiterEmail])
+  @@index([cutoff])
+  @@index([withdrawalId])
+}
+
+// Referral bonus withdrawal requests. Kept separate from IncomeHistory (main wallet).
+// Created by prisma/create-referral-withdrawal.sql, which also adds a trigger that
+// syncs ReferralBonus.status when this row's status changes.
+model ReferralWithdrawal {
+  id            String    @id @default(dbgenerated("gen_random_uuid()"))
+  email         String
+  amount        Float
+  status        String    @default("Pending")
+  cutoffLabel   String
+  cutoffs       String[]  @default([])
+  paymentMethod String?
+  payeeUid      String?
+  payeeName     String?
+  transactionId String?
+  sentAt        DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user          User            @relation(fields: [email], references: [email], onDelete: Restrict)
+  bonuses       ReferralBonus[]
+
+  @@index([email, createdAt])
+  @@index([status])
 }

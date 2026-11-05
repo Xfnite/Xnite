@@ -6,8 +6,8 @@ import { generateUniqueCredentials } from "@/lib/generateUniqueCredentials";
 import { signSessionToken, verifySessionToken } from "@/lib/jwt";
 import { signCookieValue, verifyCookieValue } from "@/lib/signedCookie";
 import { calculateNewRole } from "@/lib/roleChanger";
-import { isStaff } from "@/config/permissions";
-import { getStaffUser } from "@/lib/authGuard";
+import { isStaff, isApplicant } from "@/config/permissions";
+import { getStaffUser, getInnerCouncilUser } from "@/lib/authGuard";
 import { redis, isRedisReady } from "@/lib/redis";
 import { checkTrainingPassedFromList } from "@/lib/trainingStatus";
 import { isDemoGingerEmail } from "@/lib/gingerDemo";
@@ -35,7 +35,11 @@ export async function loginAction(formData: { email: string; password: string })
       return { success: false, error: "Invalid email or password" };
     }
 
-    if (user.status === "Deactivated" || user.status?.toLowerCase() === "inactive") {
+    const isUserApplicant = isApplicant(user.role);
+    const isUserDeactivated = user.status === "Deactivated" || user.status?.toLowerCase() === "inactive";
+
+    // Non-applicants must be reactivated by the Inner Council; applicants are auto-activated upon login.
+    if (isUserDeactivated && !isUserApplicant) {
       return { success: false, error: "Your account has been blacklisted due to inactivity. Please contact your Recruiter, Judger, Checker, or Admin for assistance." };
     }
 
@@ -130,6 +134,22 @@ export async function loginAction(formData: { email: string; password: string })
         status: "Active",
       },
     });
+
+    if (isUserApplicant && isUserDeactivated) {
+      try {
+        await prisma.userActivationLog.create({
+          data: {
+            userId: user.id,
+            userEmail: user.email,
+            previousStatus: user.status,
+            activatedByEmail: user.email,
+            activatedByRole: "applicant",
+          },
+        });
+      } catch (logErr) {
+        console.warn("Failed to record UserActivationLog for auto-activated applicant:", logErr);
+      }
+    }
 
     return { success: true, data: safeData, hasCompletedPreCourse, redirect: "/dashboard" };
 
@@ -1657,7 +1677,7 @@ export async function updateGroupLinkAction(groupId: number, linkRole: "checker"
 
 export async function getWorkLogsForUsernamesAction(usernames: string[]) {
   try {
-    if (!(await getStaffUser())) return { success: false, error: "Not authorized" };
+    if (!(await getStaffUser()) && !(await getInnerCouncilUser())) return { success: false, error: "Not authorized" };
     const cleanNames = Array.from(
       new Set(usernames.map((u) => (u || "").trim()).filter(Boolean))
     );

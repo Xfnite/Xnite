@@ -91,6 +91,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         if (user) {
           target.db_name = user.name;
           target.db_email = user.email;
+          target.db_username = user.username;
           target.db_firstName = user.firstName;
           target.db_lastName = user.lastName;
           target.db_phone = user.phone;
@@ -98,6 +99,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
           target.db_role = user.role;
           target.db_gingerEmail = user.gingerEmail;
           target.db_gingerPassword = user.gingerPassword;
+          target.db_gingerUsername = user.gingerUsername;
 
           target.db_groupId = user.group_id;
           target.db_teamId = user.team_id;
@@ -130,22 +132,54 @@ export const POST = withRateLimit(async (request: NextRequest) => {
             }
           }
 
-          if (
-            (fetchedGroupId && user.group_id !== Number(fetchedGroupId)) ||
-            (fetchedTeamId && user.team_id !== Number(fetchedTeamId)) ||
-            (firstLabelerId && user.labelerId !== firstLabelerId) ||
-            (firstLabelerPassword && user.labelerPassword !== firstLabelerPassword)
-          ) {
+          const isRealNumericId = (id: any) => {
+            if (id == null) return false;
+            const n = Number(id);
+            return !isNaN(n) && n > 0;
+          };
+
+          const newTeamId = isRealNumericId(fetchedTeamId) ? Number(fetchedTeamId) : null;
+          const newGroupId = isRealNumericId(fetchedGroupId) ? Number(fetchedGroupId) : null;
+
+          const hasValidTeamName = Boolean(
+            target.team_name &&
+            target.team_name !== "-" &&
+            target.team_name !== "null" &&
+            target.team_name !== "undefined" &&
+            String(target.team_name).trim() !== ""
+          );
+
+          // If Ginger indicates no valid team ID or no valid team name, ensure team is cleared
+          const effectiveTeamId = (newTeamId && hasValidTeamName) ? newTeamId : (hasValidTeamName ? newTeamId : null);
+          if (!hasValidTeamName || !effectiveTeamId) {
+            target.team_id = null;
+            target.origin_team_id = null;
+            target.team_name = null;
+            target.team_checker_link = null;
+            target.team_judger_link = null;
+          }
+
+          const teamChanged = user.team_id !== effectiveTeamId;
+          const groupChanged = user.group_id !== newGroupId;
+          const labelerIdChanged = Boolean(firstLabelerId && user.labelerId !== firstLabelerId);
+          const labelerPassChanged = Boolean(firstLabelerPassword && user.labelerPassword !== firstLabelerPassword);
+
+          if (teamChanged || groupChanged || labelerIdChanged || labelerPassChanged) {
             await prisma.user.update({
               where: { email: sessionEmail },
               data: {
-                group_id: fetchedGroupId ? Number(fetchedGroupId) : undefined,
-                team_id: fetchedTeamId ? Number(fetchedTeamId) : undefined,
+                group_id: newGroupId,
+                team_id: effectiveTeamId,
                 ...(firstLabelerId ? { labelerId: firstLabelerId } : {}),
                 ...(firstLabelerPassword ? { labelerPassword: firstLabelerPassword } : {})
               }
             });
+            user.team_id = effectiveTeamId;
+            user.group_id = newGroupId;
           }
+
+          target.db_groupId = user.group_id;
+          target.db_teamId = user.team_id;
         }
       } catch (e) {
         console.error("Error fetching db user info:", e);
@@ -206,7 +240,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     };
 
     if (sessionEmail && isRedisReady()) {
-      await redis.set(`api_account_cache:${sessionEmail}`, JSON.stringify(responsePayload), "EX", 3600);
+      await redis.set(`api_account_cache:${sessionEmail}`, JSON.stringify(responsePayload), "EX", 60);
     }
 
     return NextResponse.json(responsePayload);
@@ -228,6 +262,7 @@ async function buildLocalFallbackResponse(sessionEmail: string) {
   const koalaUserDetails: any = {
     db_name: user.name,
     db_email: user.email,
+    db_username: user.username,
     db_firstName: user.firstName,
     db_lastName: user.lastName,
     db_phone: user.phone,
@@ -235,6 +270,7 @@ async function buildLocalFallbackResponse(sessionEmail: string) {
     db_role: user.role,
     db_gingerEmail: user.gingerEmail,
     db_gingerPassword: user.gingerPassword,
+    db_gingerUsername: user.gingerUsername,
     user_email: user.email,
     role: user.role,
     group_id: user.group_id,

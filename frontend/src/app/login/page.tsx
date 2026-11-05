@@ -350,7 +350,7 @@ function LoginPageInner() {
                   fill="#EA4335"
                 />
               </svg>
-              Continue or Signup with Google
+              Sign Up or Continue with Google
             </button>
 
             {/* <div className="text-center text-sm text-[#2F3E46] dark:text-white/60 mt-2">

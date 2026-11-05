@@ -115,7 +115,7 @@ export default function SidebarRecruite() {
             {!isMobileOpen && (
                 <button
                     onClick={() => setIsMobileOpen(true)}
-                    className="lg:hidden fixed top-20 left-4 z-50 bg-white/90 dark:bg-[#0D1B2A]/90 backdrop-blur-xl text-black/60 dark:text-white/60 hover:text-[#1F7A1F] dark:hover:text-[#55f761] p-2 rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center border border-black/10 dark:border-white/10"
+                    className="md:hidden fixed top-20 left-4 z-50 bg-white/90 dark:bg-[#0D1B2A]/90 backdrop-blur-xl text-black/60 dark:text-white/60 hover:text-[#1F7A1F] dark:hover:text-[#55f761] p-2 rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center border border-black/10 dark:border-white/10"
                     aria-label="Open Mentor Menu"
                 >
                     <Menu className="w-5 h-5" />
@@ -127,11 +127,11 @@ export default function SidebarRecruite() {
                 <>
                     {/* Backdrop */}
                     <div
-                        className="lg:hidden fixed inset-0 bg-black/60 backdrop-blur-xs z-40 transition-opacity animate-in fade-in duration-200"
+                        className="md:hidden fixed inset-0 bg-black/60 backdrop-blur-xs z-40 transition-opacity animate-in fade-in duration-200"
                         onClick={() => setIsMobileOpen(false)}
                     />
                     {/* Drawer Panel */}
-                    <aside className="lg:hidden fixed inset-y-0 left-0 w-64 bg-white/60 dark:bg-black/40 backdrop-blur-xl border-r border-black/10 dark:border-white/10 z-45 shadow-2xl flex flex-col p-4 animate-in slide-in-from-left duration-250">
+                    <aside className="md:hidden fixed inset-y-0 left-0 w-64 bg-white/60 dark:bg-black/40 backdrop-blur-xl border-r border-black/10 dark:border-white/10 z-45 shadow-2xl flex flex-col p-4 animate-in slide-in-from-left duration-250">
                         {/* Header Block */}
                         <div className="px-2 pt-2 pb-4 mb-4 border-b border-black/5 dark:border-white/5 flex items-center justify-between">
                             <div className="flex items-center gap-2">
@@ -176,7 +176,7 @@ export default function SidebarRecruite() {
             )}
 
             {/* Desktop Sidebar */}
-            <aside className="w-64 shrink-0 hidden lg:flex flex-col h-full">
+            <aside className="w-64 shrink-0 hidden md:flex flex-col h-full">
                 <div className="bg-white/60 dark:bg-black/40 backdrop-blur-xl border border-black/10 dark:border-white/10 rounded-2xl overflow-hidden shadow-sm flex flex-col h-full p-4">
 
                     {/* Header Block */}

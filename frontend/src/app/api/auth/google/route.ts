@@ -4,6 +4,7 @@ import { signSessionToken } from "@/lib/jwt";
 import { signCookieValue } from "@/lib/signedCookie";
 import { withRateLimit } from "@/lib/rateLimit";
 import { splitFullName } from "@/lib/nameUtils";
+import { isApplicant } from "@/config/permissions";
 
 export const GET = withRateLimit(async (request: NextRequest) => {
   const { searchParams } = new URL(request.url);
@@ -74,7 +75,11 @@ export const GET = withRateLimit(async (request: NextRequest) => {
 
       // If they are logging in but don't have an account, check GingerGX first
       const existingUser = await prisma.user.findUnique({ where: { email } });
-      if (existingUser && (existingUser.status === "Deactivated" || existingUser.status?.toLowerCase() === "inactive")) {
+      const isExistingUserApplicant = existingUser ? isApplicant(existingUser.role) : false;
+      const isExistingUserDeactivated = existingUser ? (existingUser.status === "Deactivated" || existingUser.status?.toLowerCase() === "inactive") : false;
+
+      // Non-applicants must be reactivated by the Inner Council; applicants are auto-activated upon login.
+      if (existingUser && isExistingUserDeactivated && !isExistingUserApplicant) {
         return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent("Your account has been blacklisted due to inactivity. Please contact your Recruiter, Judger, Checker, or Admin for assistance.")}`);
       }
 
@@ -228,6 +233,22 @@ export const GET = withRateLimit(async (request: NextRequest) => {
         where: { email: existingUser.email },
         data: { lastLogin: new Date(), status: "Active" },
       });
+
+      if (isExistingUserApplicant && isExistingUserDeactivated) {
+        try {
+          await prisma.userActivationLog.create({
+            data: {
+              userId: existingUser.id,
+              userEmail: existingUser.email,
+              previousStatus: existingUser.status,
+              activatedByEmail: existingUser.email,
+              activatedByRole: "applicant",
+            },
+          });
+        } catch (logErr) {
+          console.warn("Failed to record UserActivationLog for auto-activated applicant (Google route):", logErr);
+        }
+      }
 
       return response;
 

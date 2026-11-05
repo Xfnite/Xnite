@@ -21,6 +21,9 @@ export interface UserPermissionsContext {
 // get the sidebar "Inner Council" link (Top Mentors). Staff always have it.
 export const INNER_COUNCIL_MIN_PASSERS = 5;
 
+// Minimum claimable referral bonus (PHP) required before a withdrawal is allowed.
+export const REFERRAL_BONUS_MIN_WITHDRAW = 1500;
+
 // 1. Core Role Normalizers
 export function getNormalizedRole(role?: string): SystemRole {
   const clean = role?.trim()?.toLowerCase() || "";
@@ -48,6 +51,13 @@ export function isApplicant(role?: string): boolean {
 }
 
 // Roles that can earn Inner Council access through their recruit count.
+// Referral bonus in wallet is only for labelers and old labelers.
+// Inner council roles (checker, judger, recruiter, admin) have referral bonuses added directly to their salary.
+export function isLabelerOrOldLabeler(role?: string): boolean {
+  const norm = getNormalizedRole(role);
+  return norm === "labeler" || norm === "old-labeler";
+}
+
 export function canEarnInnerCouncil(role?: string): boolean {
   const norm = getNormalizedRole(role);
   return norm === "labeler" || norm === "old-labeler";
@@ -108,6 +118,12 @@ export const GATES = {
       return isGamificationPreviewVisible(ctx.role);
     }
 
+    // Referral bonus in wallet is only for labelers and old labelers.
+    // Inner council (checker, judger, recruiter, admin) have referral bonuses added directly to their salary.
+    if (pathname.startsWith("/wallet/referral-bonus")) {
+      return isLabelerOrOldLabeler(ctx.role);
+    }
+
     // Project and Wallet rules
     if (pathname.startsWith("/project") || pathname.startsWith("/wallet")) {
       if (isStaff(ctx.role)) return true;
@@ -120,8 +136,13 @@ export const GATES = {
       return roleNorm === "admin" || roleNorm === "checker" || roleNorm === "judger";
     }
 
-    // Top Mentors is the Inner Council page for labelers who earned it
-    if (pathname.startsWith("/recruiter/ranking")) {
+    // Top Mentors and Apprentices (My Own Recruits) are accessible to staff
+    // and labelers / old labelers who earned Inner Council access
+    if (
+      pathname === "/recruiter" ||
+      pathname.startsWith("/recruiter/ranking") ||
+      pathname.startsWith("/recruiter/recruits")
+    ) {
       return isStaff(ctx.role) || !!ctx.hasInnerCouncilAccess;
     }
 

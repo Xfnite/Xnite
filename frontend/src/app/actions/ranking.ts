@@ -236,6 +236,13 @@ const getCachedRecruiterLeaderboards = unstable_cache(
     const [recruitersRes, allUsers] = await Promise.all([
       listActiveReferrers({ merged: false }),
       prisma.user.findMany({
+        where: {
+          status: "Active",
+          OR: [
+            { refererEmail: { not: null } },
+            { labelerRefererEmail: { not: null } }
+          ]
+        },
         select: {
           refererEmail: true,
           labelerRefererEmail: true,

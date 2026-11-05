@@ -43,7 +43,7 @@ function hasPassedTraining(trainings: MappedTraining[], type: "landcover" | "3d"
 
 import { prisma } from "@/lib/db";
 import { getGroupStaffNamesAction } from "@/app/actions/auth";
-import { getAuthedUser, getStaffUser, type AuthedUser } from "@/lib/authGuard";
+import { getAuthedUser, getStaffUser, getInnerCouncilUser, type AuthedUser } from "@/lib/authGuard";
 import { listActiveReferrers } from "@/lib/referrers";
 import { getRecruiterEmails, expandAllRecruiterEmails, recruitsOfWhere } from "@/lib/recruits";
 import { toUserFacingError } from "@/lib/userFacingError";
@@ -467,7 +467,7 @@ export interface GetPaginatedUsersParams {
 
 export async function getPaginatedUsersAction(params: GetPaginatedUsersParams) {
   try {
-    const staff = await getStaffUser();
+    const staff = (await getStaffUser()) || (await getInnerCouncilUser());
     if (!staff) return { success: false, error: "Not authorized" };
 
     const {
@@ -841,7 +841,7 @@ export interface GetExportUsersParams {
 
 export async function getFilteredUsersForExportAction(params: GetExportUsersParams) {
   try {
-    const staff = await getStaffUser();
+    const staff = (await getStaffUser()) || (await getInnerCouncilUser());
     if (!staff) return { success: false, error: "Not authorized" };
 
     const {

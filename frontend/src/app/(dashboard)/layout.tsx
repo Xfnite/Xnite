@@ -230,8 +230,8 @@ export default function DashboardLayout({
               isTransportationPassed: isTrainingExempt,
               isRoofPassed: isTrainingExempt,
             }),
-        // Only needed to let a labeler / old labeler into Top Mentors
-        pathname.startsWith("/recruiter/ranking") && canEarnInnerCouncil(user.role)
+        // Only needed to let a labeler / old labeler into Top Mentors or Apprentices (Own Recruits)
+        pathname.startsWith("/recruiter") && canEarnInnerCouncil(user.role)
           ? getInnerCouncilAccessAction().then((res) => res.hasAccess).catch(() => false)
           : Promise.resolve(false),
       ])

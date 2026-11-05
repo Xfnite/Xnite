@@ -67,10 +67,15 @@ export default function AccountPage() {
               db_role: u.role,
               email: u.email,
               user_name: u.gingerUsername || u.name,
+              ginger_username: u.gingerUsername,
               ginger_email: u.gingerEmail || u.email,
               ginger_password: u.gingerPassword || "••••••••",
               labeler_id: u.labelerId || undefined,
               labeler_password: u.labelerPassword || undefined,
+              team_id: u.team_id || null,
+              group_id: u.group_id || null,
+              db_teamId: u.team_id || null,
+              db_groupId: u.group_id || null,
             };
             setUserData(fallbackDetails);
             loadedDetails = fallbackDetails;
@@ -198,10 +203,15 @@ export default function AccountPage() {
                   db_role: u.role,
                   email: u.email,
                   user_name: u.gingerUsername || u.name,
+                  ginger_username: u.gingerUsername,
                   ginger_email: u.gingerEmail || u.email,
                   ginger_password: u.gingerPassword || "••••••••",
                   labeler_id: u.labelerId || undefined,
                   labeler_password: u.labelerPassword || undefined,
+                  team_id: u.team_id || null,
+                  group_id: u.group_id || null,
+                  db_teamId: u.team_id || null,
+                  db_groupId: u.group_id || null,
                 });
               } else {
                 setError("Unable to load account details. Please check your connection or try again later.");
@@ -352,8 +362,53 @@ export default function AccountPage() {
     return acc;
   }, {});
 
-  const hasGroup = userData?.group_name && userData.group_name !== "-" && userData.group_name !== "null" && userData.group_name !== "undefined" && userData.group_name.trim() !== "";
-  const hasTeam = userData?.team_name && userData.team_name !== "-" && userData.team_name !== "null" && userData.team_name !== "undefined" && userData.team_name.trim() !== "";
+  const isRealNumericId = (id: any) => {
+    if (id == null) return false;
+    const n = Number(id);
+    return !isNaN(n) && n > 0;
+  };
+
+  const hasGroup = Boolean(
+    userData?.group_name &&
+    userData.group_name !== "-" &&
+    userData.group_name !== "null" &&
+    userData.group_name !== "undefined" &&
+    String(userData.group_name).trim() !== ""
+  );
+
+  const hasValidTeamName = Boolean(
+    userData?.team_name &&
+    userData.team_name !== "-" &&
+    userData.team_name !== "null" &&
+    userData.team_name !== "undefined" &&
+    String(userData.team_name).trim() !== ""
+  );
+
+  // A user has a team only if their team_name is valid AND (if team_id is present) it is a valid ID > 0.
+  // If team_name is empty/dash or team_id is 0/null, they have NO team.
+  const hasTeam = Boolean(
+    hasValidTeamName && (userData?.team_id == null || isRealNumericId(userData.team_id))
+  );
+
+  const accountUsername =
+    userData?.db_username ||
+    sessionUser?.username ||
+    (userData?.db_email || userData?.user_email || sessionUser?.email || "").replace(/@.*$/, "");
+
+  const accountEmail =
+    userData?.db_email ||
+    userData?.user_email ||
+    sessionUser?.email ||
+    "";
+
+  const rawGingerUsername =
+    userData?.db_gingerUsername ||
+    userData?.ginger_username ||
+    sessionUser?.gingerUsername;
+
+  // Account email is always displayed (never gingeremail).
+  const displayEmail = accountEmail;
+
   const isOldLabeler =
     sessionUser?.role?.trim()?.toLowerCase() === "old-labeler" ||
     userData?.db_role?.trim()?.toLowerCase() === "old-labeler";
@@ -437,15 +492,10 @@ export default function AccountPage() {
 
                       <div className="flex items-center gap-2 relative z-10">
                         <span className="text-lg font-bold text-[#0D1B2A] dark:text-white">
-                          {(userData.db_email || userData.user_email || "").replace(/@.*$/, "")}
+                          {accountUsername}
                         </span>
                         <button
-                          onClick={() => {
-                            const username = (userData.db_email || userData.user_email || "").replace(/@.*$/, "");
-                            navigator.clipboard.writeText(username);
-                            setCopiedKey("username");
-                            setTimeout(() => setCopiedKey(null), 2000);
-                          }}
+                          onClick={() => copyToClipboard(accountUsername, "username")}
                           className="p-1.5 rounded-md hover:bg-black/5 dark:hover:bg-white/10 text-gray-400 hover:text-[#1F7A1F] dark:hover:text-[#55f761] transition-colors"
                           title="Copy Username"
                         >
@@ -456,9 +506,34 @@ export default function AccountPage() {
                           )}
                         </button>
                       </div>
-                      <div className="text-xs text-[#2F3E46] dark:text-white/60 mt-1 opacity-80">
-                        {userData.db_email || userData.user_email}
-                      </div>
+
+                      {hasTeam && rawGingerUsername && (
+                        <div className="flex items-center gap-1.5 relative z-10 mt-1">
+                          <span className="text-xs font-semibold text-[#1F7A1F] dark:text-[#55f761]">
+                            Ginger Username:
+                          </span>
+                          <span className="text-xs font-bold text-[#0D1B2A] dark:text-white font-mono">
+                            {rawGingerUsername}
+                          </span>
+                          <button
+                            onClick={() => copyToClipboard(rawGingerUsername, "gingerUsername")}
+                            className="p-1 rounded-md hover:bg-black/5 dark:hover:bg-white/10 text-gray-400 hover:text-[#1F7A1F] dark:hover:text-[#55f761] transition-colors"
+                            title="Copy Ginger Username"
+                          >
+                            {copiedKey === "gingerUsername" ? (
+                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-[#1F7A1F] dark:text-[#55f761]"><polyline points="20 6 9 17 4 12" /></svg>
+                            ) : (
+                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2" /><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /></svg>
+                            )}
+                          </button>
+                        </div>
+                      )}
+
+                      {displayEmail && (
+                        <div className="text-xs text-[#2F3E46] dark:text-white/60 mt-1 opacity-80">
+                          {displayEmail}
+                        </div>
+                      )}
 
                       {/* <div className="text-[11px] text-[#2F3E46] dark:text-white/50 mt-3 border-t border-black/5 dark:border-white/5 pt-2">
                         Default Role: <span className="font-semibold text-[#0D1B2A] dark:text-white capitalize">{userData.role || '-'}</span>
