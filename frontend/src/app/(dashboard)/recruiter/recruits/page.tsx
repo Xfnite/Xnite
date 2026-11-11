@@ -656,8 +656,10 @@ function RecruitsDashboardContent() {
                 const groupIdStr = validId(user.group_id) ? String(user.group_id) : "";
                 const teamIdStr = validId(user.team_id) ? String(user.team_id) : "";
 
-                // Same fallback chain the Recruiter column uses in the table.
-                const recruiterName = user.labelerRefererName || user.referer?.name || user.resolvedRefererName || user.refererEmail || "Direct";
+                // Prioritize labelerRefererEmail / labelerRefererName, since refererEmail may be set to iru fallback.
+                const recruiterName = (user.labelerRefererEmail
+                    ? (user.labelerRefererName || user.labelerRefererEmail.split("@")[0])
+                    : (user.resolvedRefererName || user.referer?.name || user.refererEmail)) || "Direct";
                 const checkerName = validId(user.group_id) ? (checkerByGroupId[user.group_id] || "") : "";
                 // A group's judger lives on its parent team; fall back to the user's own team.
                 const judgerName =

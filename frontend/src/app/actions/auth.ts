@@ -1744,33 +1744,42 @@ export async function getGroupMembersDetailsAction(identifiers: string[]) {
 
     const labelerEmails = new Set<string>();
     dbUsers.forEach((u) => {
-      if (u.labelerRefererEmail) labelerEmails.add(u.labelerRefererEmail);
+      if (u.labelerRefererEmail) labelerEmails.add(u.labelerRefererEmail.trim().toLowerCase());
     });
 
     if (labelerEmails.size > 0) {
+      const emailList = Array.from(labelerEmails);
       // Recruiters can be stored by their referal email, which may have no Xfnite
       // account, so fall back to the referal row's name (same order as attachLabelerNames).
       const [labelers, referals] = await Promise.all([
         prisma.user.findMany({
-          where: { email: { in: Array.from(labelerEmails) } },
-          select: { email: true, name: true, firstName: true, lastName: true, gingerUsername: true }
+          where: {
+            OR: [
+              { email: { in: emailList, mode: "insensitive" } },
+              { linkedRecruiterEmail: { in: emailList, mode: "insensitive" } },
+              { gingerEmail: { in: emailList, mode: "insensitive" } },
+            ]
+          },
+          select: { email: true, linkedRecruiterEmail: true, gingerEmail: true, name: true, firstName: true, lastName: true, gingerUsername: true }
         }),
         prisma.referal.findMany({
-          where: { email: { in: Array.from(labelerEmails) } },
+          where: { email: { in: emailList, mode: "insensitive" } },
           select: { email: true, name: true, username: true }
         }),
       ]);
       const nameByEmail = new Map<string, string>();
       referals.forEach((r) => {
         const name = r.name?.trim() || r.username?.trim();
-        if (name) nameByEmail.set(r.email, name);
+        if (name) nameByEmail.set(r.email.trim().toLowerCase(), name);
       });
       labelers.forEach((l) => {
-        nameByEmail.set(l.email, (l.firstName && l.lastName) ? l.firstName + ' ' + l.lastName : (l.name || l.gingerUsername || l.email));
+        const name = (l.firstName && l.lastName) ? l.firstName + ' ' + l.lastName : (l.name || l.gingerUsername || l.email);
+        const setKeys = [l.email, l.linkedRecruiterEmail, l.gingerEmail].filter(Boolean) as string[];
+        setKeys.forEach(k => nameByEmail.set(k.trim().toLowerCase(), name));
       });
       const mapped = dbUsers.map(u => ({
         ...u,
-        labelerRefererName: u.labelerRefererEmail ? nameByEmail.get(u.labelerRefererEmail) || null : null
+        labelerRefererName: u.labelerRefererEmail ? (nameByEmail.get(u.labelerRefererEmail.trim().toLowerCase()) || u.labelerRefererEmail.split("@")[0]) : null
       }));
       return { success: true, data: mapped };
     }

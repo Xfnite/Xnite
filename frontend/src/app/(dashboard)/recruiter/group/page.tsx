@@ -1920,8 +1920,8 @@ export default function MyOwnGSPage() {
             if (sortColumn === "recruiter") {
                 const aDb = findDbUser(a);
                 const bDb = findDbUser(b);
-                const aRec = (aDb?.labelerRefererName || aDb?.referer?.name || aDb?.refererEmail || "").toLowerCase();
-                const bRec = (bDb?.labelerRefererName || bDb?.referer?.name || bDb?.refererEmail || "").toLowerCase();
+                const aRec = ((aDb?.labelerRefererEmail ? (aDb.labelerRefererName || aDb.labelerRefererEmail) : (aDb?.resolvedRefererName || aDb?.referer?.name || aDb?.refererEmail)) || "").toLowerCase();
+                const bRec = ((bDb?.labelerRefererEmail ? (bDb.labelerRefererName || bDb.labelerRefererEmail) : (bDb?.resolvedRefererName || bDb?.referer?.name || bDb?.refererEmail)) || "").toLowerCase();
                 return aRec.localeCompare(bRec) * dir;
             }
             if (sortColumn === "joined") {
@@ -2145,8 +2145,10 @@ export default function MyOwnGSPage() {
                 const userRole = dbUser?.role || u.role || u.user_role || "";
                 const groupId = memberGroupId(u);
 
-                // Same fallback chain the Recruiter column uses in the table.
-                const recruiterName = dbUser?.labelerRefererName || dbUser?.referer?.name || dbUser?.refererEmail || "Direct";
+                // Prioritize labelerRefererEmail / labelerRefererName, since refererEmail may be set to iru fallback.
+                const recruiterName = (dbUser?.labelerRefererEmail
+                    ? (dbUser.labelerRefererName || dbUser.labelerRefererEmail.split("@")[0])
+                    : (dbUser?.resolvedRefererName || dbUser?.referer?.name || dbUser?.refererEmail)) || "Direct";
 
                 const checkerName = groupId !== null ? (checkerNameByGroupId[groupId] || "") : "";
 
@@ -2337,7 +2339,7 @@ export default function MyOwnGSPage() {
                     {/* Recruiter */}
                     {showRecruiter && (
                         <td className="px-6 py-4 whitespace-nowrap text-[#2F3E46]/80 dark:text-white/70 font-semibold">
-                            {dbUser?.labelerRefererName || dbUser?.referer?.name || dbUser?.refererEmail || "Direct"}
+                            {(dbUser?.labelerRefererEmail ? (dbUser.labelerRefererName || dbUser.labelerRefererEmail.split("@")[0]) : (dbUser?.resolvedRefererName || dbUser?.referer?.name || dbUser?.refererEmail)) || "Direct"}
                         </td>
                     )}
 

@@ -855,7 +855,7 @@ export default function RecruitsTable({
 
                                     {showRecruiter && (
                                         <td className="px-3 py-3 lg:px-4 lg:py-4 text-[#2F3E46]/80 dark:text-white/70 font-semibold max-w-[150px] break-words">
-                                            {user.labelerRefererEmail ? (user.labelerRefererName || user.labelerRefererEmail) : (user.resolvedRefererName || user.referer?.name || user.refererEmail || "Direct")}
+                                            {user.labelerRefererEmail ? (user.labelerRefererName || user.labelerRefererEmail.split("@")[0]) : (user.resolvedRefererName || user.referer?.name || user.refererEmail || "Direct")}
                                         </td>
                                     )}
 
@@ -1208,7 +1208,7 @@ export default function RecruitsTable({
                             {showRecruiter && (
                                 <div className="flex items-center justify-between text-xs text-[#2F3E46]/60 dark:text-white/40 pt-1 border-t border-black/5 dark:border-white/5">
                                     <span>Mentor</span>
-                                    <span className="font-semibold text-[#0D1B2A] dark:text-white">{user.labelerRefererName || user.referer?.name || user.refererEmail || "Direct"}</span>
+                                    <span className="font-semibold text-[#0D1B2A] dark:text-white">{(user.labelerRefererEmail ? (user.labelerRefererName || user.labelerRefererEmail.split("@")[0]) : (user.resolvedRefererName || user.referer?.name || user.refererEmail)) || "Direct"}</span>
                                 </div>
                             )}
 

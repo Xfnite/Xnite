@@ -438,10 +438,16 @@ export default function UserTableContent({ users, recruiters, currentUserRole, f
 
     const getRecruiterName = (user: SystemUser) => {
         if (user.labelerRefererName) return user.labelerRefererName;
+        if (user.labelerRefererEmail) {
+            const recruiter = recruiters?.find((r) => r.email?.toLowerCase() === user.labelerRefererEmail?.toLowerCase());
+            if (recruiter && (recruiter.name || recruiter.username)) {
+                return recruiter.name || recruiter.username;
+            }
+            return user.labelerRefererEmail.split("@")[0];
+        }
         if (user.resolvedRefererName) return user.resolvedRefererName;
-        if (user.labelerRefererEmail) return "Labeler";
         if (!user.refererEmail) return "Organic";
-        const recruiter = recruiters?.find((r) => r.email === user.refererEmail);
+        const recruiter = recruiters?.find((r) => r.email?.toLowerCase() === user.refererEmail?.toLowerCase());
         if (recruiter && (recruiter.name || recruiter.username)) {
             return recruiter.name || recruiter.username;
         }

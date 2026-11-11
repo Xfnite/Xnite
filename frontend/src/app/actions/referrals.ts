@@ -120,8 +120,8 @@ export async function getRecruiterDetailsAction(email: string) {
 async function attachLabelerNames(users: any[]) {
   const emailsToFetch = new Set<string>();
   users.forEach((u) => {
-    if (u.labelerRefererEmail) emailsToFetch.add(u.labelerRefererEmail);
-    if (u.refererEmail) emailsToFetch.add(u.refererEmail);
+    if (u.labelerRefererEmail) emailsToFetch.add(u.labelerRefererEmail.trim().toLowerCase());
+    if (u.refererEmail) emailsToFetch.add(u.refererEmail.trim().toLowerCase());
   });
 
   if (emailsToFetch.size === 0) {
@@ -134,13 +134,21 @@ async function attachLabelerNames(users: any[]) {
     }));
   }
 
+  const emailList = Array.from(emailsToFetch);
+
   const [labelers, referals] = await Promise.all([
     prisma.user.findMany({
-      where: { email: { in: Array.from(emailsToFetch) } },
-      select: { email: true, name: true, firstName: true, lastName: true, gingerUsername: true, facebook: true },
+      where: {
+        OR: [
+          { email: { in: emailList, mode: "insensitive" } },
+          { linkedRecruiterEmail: { in: emailList, mode: "insensitive" } },
+          { gingerEmail: { in: emailList, mode: "insensitive" } },
+        ]
+      },
+      select: { email: true, linkedRecruiterEmail: true, gingerEmail: true, name: true, firstName: true, lastName: true, gingerUsername: true, facebook: true },
     }),
     prisma.referal.findMany({
-      where: { email: { in: Array.from(emailsToFetch) } },
+      where: { email: { in: emailList, mode: "insensitive" } },
       select: { email: true, name: true, username: true },
     })
   ]);
@@ -150,8 +158,9 @@ async function attachLabelerNames(users: any[]) {
 
   // Fallback 1: Referal table
   referals.forEach((r) => {
-    if (r.name) nameByEmail.set(r.email, r.name);
-    else if (r.username) nameByEmail.set(r.email, r.username);
+    const key = r.email.trim().toLowerCase();
+    if (r.name) nameByEmail.set(key, r.name);
+    else if (r.username) nameByEmail.set(key, r.username);
   });
 
   // Fallback 2: User table (higher priority)
@@ -162,19 +171,23 @@ async function attachLabelerNames(users: any[]) {
     } else if (l.gingerUsername) {
       name = l.gingerUsername;
     }
-    
-    // Only overwrite if it's a real name or we don't have one yet
-    if (name && (!name.includes('@') || !nameByEmail.has(l.email))) {
-      nameByEmail.set(l.email, name);
-    }
 
-    if (l.facebook) {
-      facebookByEmail.set(l.email, l.facebook);
-    }
+    const setKeys = [l.email, l.linkedRecruiterEmail, l.gingerEmail].filter(Boolean) as string[];
+    setKeys.forEach(k => {
+      const key = k.trim().toLowerCase();
+      // Only overwrite if it's a real name or we don't have one yet
+      if (name && (!name.includes('@') || !nameByEmail.has(key))) {
+        nameByEmail.set(key, name);
+      }
+      if (l.facebook) {
+        facebookByEmail.set(key, l.facebook);
+      }
+    });
   });
 
   const formatName = (email: string) => {
-    const found = nameByEmail.get(email);
+    const key = email.trim().toLowerCase();
+    const found = nameByEmail.get(key);
     if (found && !found.includes("@")) return found;
     return email.split("@")[0]; // Fallback to stripping the domain from the email
   };
@@ -182,9 +195,9 @@ async function attachLabelerNames(users: any[]) {
   return users.map((u) => ({
     ...u,
     labelerRefererName: u.labelerRefererEmail ? formatName(u.labelerRefererEmail) : null,
-    labelerRefererFacebook: u.labelerRefererEmail ? (facebookByEmail.get(u.labelerRefererEmail) || null) : null,
+    labelerRefererFacebook: u.labelerRefererEmail ? (facebookByEmail.get(u.labelerRefererEmail.trim().toLowerCase()) || null) : null,
     resolvedRefererName: u.refererEmail ? formatName(u.refererEmail) : null,
-    resolvedRefererFacebook: u.refererEmail ? (facebookByEmail.get(u.refererEmail) || null) : null,
+    resolvedRefererFacebook: u.refererEmail ? (facebookByEmail.get(u.refererEmail.trim().toLowerCase()) || null) : null,
   }));
 }
 

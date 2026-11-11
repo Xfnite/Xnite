@@ -46,6 +46,7 @@ interface SystemUser {
     refererEmail: string | null;
     labelerRefererEmail?: string | null;
     labelerRefererName?: string | null;
+    resolvedRefererName?: string | null;
     onboardingProgress: any;
     isRulesAndGuidelinesCompleted: boolean;
     onRulesAndGuidelinesProgress: any;
@@ -495,7 +496,9 @@ function RecruiterDashboardContent() {
                     day: "numeric",
                     year: "numeric"
                 });
-                const recruiter = user.referer?.name || user.refererEmail || "Direct";
+                const recruiter = (user.labelerRefererEmail
+                    ? (user.labelerRefererName || user.labelerRefererEmail.split("@")[0])
+                    : (user.resolvedRefererName || user.referer?.name || user.refererEmail)) || "Direct";
                 const username = user.email ? user.email.split("@")[0] : "";
                 const lastLoginDate = user.lastLogin
                     ? new Date(user.lastLogin).toLocaleDateString("en-US", {
