@@ -66,6 +66,30 @@ function getCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+const ICE_SERVERS: RTCIceServer[] = [
+  { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun2.l.google.com:19302" },
+  { urls: "stun:stun3.l.google.com:19302" },
+  { urls: "stun:stun.cloudflare.com:3478" },
+  { urls: "stun:stun.services.mozilla.com" },
+  {
+    urls: "turn:openrelay.metered.ca:80",
+    username: "openrelay",
+    credential: "openrelay",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443",
+    username: "openrelay",
+    credential: "openrelay",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443?transport=tcp",
+    username: "openrelay",
+    credential: "openrelay",
+  },
+];
+
 export default function LivestreamPage() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -133,6 +157,8 @@ export default function LivestreamPage() {
   const socketRef = useRef<Socket | null>(null);
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map()); // For Checker: viewerSocketId -> RTCPeerConnection
   const viewerPeerConnectionRef = useRef<RTCPeerConnection | null>(null); // For Viewer
+  const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map()); // Checker buffer: viewerSocketId -> candidates
+  const viewerPendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]); // Viewer buffer: candidates before remoteDescription
 
   // Manual File Upload State
   const [uploadFile, setUploadFile] = useState<File | null>(null);
@@ -194,13 +220,13 @@ export default function LivestreamPage() {
     socket.on("livestream:viewer_joined", async ({ viewerSocketId }) => {
       if (!mediaStreamRef.current) return;
 
-      const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: "stun:stun.l.google.com:19302" },
-          { urls: "stun:stun1.l.google.com:19302" },
-        ],
-      });
+      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
       peerConnectionsRef.current.set(viewerSocketId, pc);
+      pendingCandidatesRef.current.set(viewerSocketId, []);
+
+      pc.oniceconnectionstatechange = () => {
+        console.log(`[Checker ICE] ${viewerSocketId}: ${pc.iceConnectionState}`);
+      };
 
       mediaStreamRef.current.getTracks().forEach((track) => {
         pc.addTrack(track, mediaStreamRef.current!);
@@ -233,6 +259,7 @@ export default function LivestreamPage() {
         pc.close();
         peerConnectionsRef.current.delete(viewerSocketId);
       }
+      pendingCandidatesRef.current.delete(viewerSocketId);
     });
 
     // --- VIEWER & CHECKER: Handle incoming WebRTC signals ---
@@ -243,13 +270,13 @@ export default function LivestreamPage() {
           viewerPeerConnectionRef.current.close();
         }
 
-        const pc = new RTCPeerConnection({
-          iceServers: [
-            { urls: "stun:stun.l.google.com:19302" },
-            { urls: "stun:stun1.l.google.com:19302" },
-          ],
-        });
+        const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
         viewerPeerConnectionRef.current = pc;
+        viewerPendingCandidatesRef.current = [];
+
+        pc.oniceconnectionstatechange = () => {
+          console.log(`[Viewer ICE] state: ${pc.iceConnectionState}`);
+        };
 
         pc.ontrack = (event) => {
           let stream = event.streams[0];
@@ -273,6 +300,14 @@ export default function LivestreamPage() {
         };
 
         await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+
+        // Flush any candidates buffered before remoteDescription was set
+        const buffered = viewerPendingCandidatesRef.current;
+        viewerPendingCandidatesRef.current = [];
+        for (const cand of buffered) {
+          await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+        }
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
@@ -285,12 +320,34 @@ export default function LivestreamPage() {
         const pc = peerConnectionsRef.current.get(senderSocketId);
         if (pc) {
           await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+
+          // Flush any buffered candidates for this viewer
+          const buffered = pendingCandidatesRef.current.get(senderSocketId) || [];
+          pendingCandidatesRef.current.delete(senderSocketId);
+          for (const cand of buffered) {
+            await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+          }
         }
       } else if (signal.candidate) {
-        // 3. ICE candidate exchange
-        const pc = peerConnectionsRef.current.get(senderSocketId) || viewerPeerConnectionRef.current;
-        if (pc && pc.remoteDescription) {
-          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)).catch(() => {});
+        // 3. ICE candidate exchange with buffer support
+        if (peerConnectionsRef.current.has(senderSocketId)) {
+          // Candidate on Checker from Viewer
+          const pc = peerConnectionsRef.current.get(senderSocketId)!;
+          if (pc.remoteDescription && pc.remoteDescription.type) {
+            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)).catch(() => {});
+          } else {
+            const queue = pendingCandidatesRef.current.get(senderSocketId) || [];
+            queue.push(signal.candidate);
+            pendingCandidatesRef.current.set(senderSocketId, queue);
+          }
+        } else if (viewerPeerConnectionRef.current) {
+          // Candidate on Viewer from Checker
+          const pc = viewerPeerConnectionRef.current;
+          if (pc.remoteDescription && pc.remoteDescription.type) {
+            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)).catch(() => {});
+          } else {
+            viewerPendingCandidatesRef.current.push(signal.candidate);
+          }
         }
       }
     });
@@ -720,21 +777,45 @@ export default function LivestreamPage() {
                       <video
                         ref={(el) => {
                           viewerVideoRef.current = el;
-                          if (el && remoteStreamRef.current && el.srcObject !== remoteStreamRef.current) {
-                            el.srcObject = remoteStreamRef.current;
-                            el.play().catch(() => {});
+                          if (el) {
+                            el.muted = isViewerMuted;
+                            el.defaultMuted = isViewerMuted;
+                            if (remoteStreamRef.current && el.srcObject !== remoteStreamRef.current) {
+                              el.srcObject = remoteStreamRef.current;
+                              el.play().catch(() => {});
+                            }
                           }
                         }}
                         autoPlay
                         playsInline
                         muted={isViewerMuted}
                         controls
+                        onLoadedMetadata={(e) => {
+                          (e.target as HTMLVideoElement).play().catch(() => {});
+                        }}
+                        onCanPlay={(e) => {
+                          (e.target as HTMLVideoElement).play().catch(() => {});
+                        }}
                         className="w-full h-full object-contain"
                       />
                       <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/90 text-white text-xs font-bold uppercase tracking-wider shadow-lg">
                         <span className="w-2 h-2 rounded-full bg-white animate-ping" />
                         LIVE: {liveSession.checkerName}
                       </div>
+
+                      <button
+                        onClick={() => {
+                          if (socketRef.current) {
+                            socketRef.current.emit("livestream:join_room");
+                            toast.info("Reconnecting live stream feed...");
+                          }
+                        }}
+                        className="absolute top-3 right-3 z-30 px-3 py-1.5 rounded-xl bg-black/70 hover:bg-black/90 text-white text-xs font-semibold flex items-center gap-1.5 border border-white/20 transition-all cursor-pointer backdrop-blur-md"
+                        title="Click if stream is buffering or frozen"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        Reload Feed
+                      </button>
 
                       {/* Unmute overlay button if muted */}
                       {isViewerMuted && (
