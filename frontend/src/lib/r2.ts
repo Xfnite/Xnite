@@ -138,3 +138,55 @@ export async function uploadQrToR2(
     return { success: false, error: toUserFacingError(error, "Couldn't upload the QR image. Please try again.") };
   }
 }
+
+/**
+ * Uploads an audit recording or pre-recorded video check to Cloudflare R2
+ * with fallback to local public directory in development.
+ */
+export async function uploadVideoToR2(
+  fileBuffer: Buffer,
+  originalFilename: string = "recording.webm",
+  mimeType: string = "video/webm"
+): Promise<{ success: boolean; url?: string; error?: string }> {
+  try {
+    const timestamp = Date.now();
+    const cleanFilename = originalFilename.replace(/[^a-zA-Z0-9_.-]/g, "_");
+    const key = `recordings/${timestamp}-${cleanFilename}`;
+
+    // If R2 credentials are configured, upload to Cloudflare R2
+    if (R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_ENDPOINT) {
+      const bucket = process.env.R2_STREAM_BUCKET || "streams";
+      const command = new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: fileBuffer,
+        ContentType: mimeType,
+        CacheControl: "public, max-age=31536000, immutable",
+      });
+
+      await s3Client.send(command);
+
+      const publicDomain =
+        process.env.R2_STREAM_DOMAIN ||
+        process.env.NEXT_PUBLIC_R2_STREAM_DOMAIN ||
+        "https://streams.xfnite.cloud";
+      const publicUrl = `${publicDomain.replace(/\/+$/, "")}/${key}`;
+      return { success: true, url: publicUrl };
+    }
+
+    // Fallback: Store locally in public/uploads/recordings for localhost testing
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    const uploadDir = path.join(process.cwd(), "public", "uploads", "recordings");
+    await fs.mkdir(uploadDir, { recursive: true });
+
+    const localFilename = `${timestamp}-${cleanFilename}`;
+    const localFilePath = path.join(uploadDir, localFilename);
+    await fs.writeFile(localFilePath, fileBuffer);
+
+    return { success: true, url: `/uploads/recordings/${localFilename}` };
+  } catch (error: any) {
+    console.error("[uploadVideoToR2] Failed to upload video:", error);
+    return { success: false, error: toUserFacingError(error, "Failed to upload video recording.") };
+  }
+}

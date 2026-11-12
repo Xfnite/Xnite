@@ -73,4 +73,8 @@ scripts/test_*
 *.bin
 *.so
 
+# Uploaded test/local media
+frontend/public/uploads/
+public/uploads/
+
 

@@ -9,6 +9,11 @@ const globalForPrisma = global as unknown as {
   pool: Pool | undefined;
 };
 
+// Self-healing: if newly added models like checkRecording are missing from memory, invalidate the cached singleton
+if (globalForPrisma.prisma && !globalForPrisma.prisma.checkRecording) {
+  globalForPrisma.prisma = undefined;
+}
+
 const pool = globalForPrisma.pool ?? new Pool({ connectionString });
 const adapter = new PrismaPg(pool);
 const prisma = globalForPrisma.prisma ?? new PrismaClient({ adapter });
@@ -18,4 +23,4 @@ if (process.env.NODE_ENV !== "production") {
   globalForPrisma.pool = pool;
 }
 
-export { prisma };
+export { prisma, pool };

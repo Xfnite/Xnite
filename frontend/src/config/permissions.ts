@@ -124,8 +124,8 @@ export const GATES = {
       return isLabelerOrOldLabeler(ctx.role);
     }
 
-    // Project and Wallet rules
-    if (pathname.startsWith("/project") || pathname.startsWith("/wallet")) {
+    // Project, Wallet, and Livestream rules
+    if (pathname.startsWith("/project") || pathname.startsWith("/wallet") || pathname.startsWith("/livestream")) {
       if (isStaff(ctx.role)) return true;
       return !!ctx.isStandardBuildingPassed;
     }

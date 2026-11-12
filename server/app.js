@@ -368,6 +368,7 @@ let jukeboxListeners = new Set(); // tracks socket IDs actively listening
 const jukeboxLastAddedTimes = new Map();
 const activeConnections = new Map(); // tracks unique users by email
 const activeChatWidgetConnections = new Map(); // tracks unique users by email with chat open
+let activeLivestreamSession = null; // tracks active live check session for real-time screen sharing
 
 function getFakeCount(realCount, type) {
   if (realCount === 0) return 0;
@@ -1532,7 +1533,68 @@ io.on("connection", (socket) => {
     }
   });
 
+  // --- Livestream & Real-Time Screen Share Signaling ---
+  socket.on("livestream:checker_start", (data) => {
+    activeLivestreamSession = {
+      checkerSocketId: socket.id,
+      checkerEmail: socket.user?.email || "checker",
+      checkerName: socket.user?.name || "Lead Checker",
+      title: data?.title || "Quality Audit Check",
+      projectType: data?.projectType || "Standard Building",
+      startedAt: new Date(),
+    };
+    io.emit("livestream:status_update", { isLive: true, session: activeLivestreamSession });
+    socket.to("room:livestream").emit("livestream:stream_available");
+  });
+
+  socket.on("livestream:get_status", () => {
+    socket.emit("livestream:status_update", { isLive: !!activeLivestreamSession, session: activeLivestreamSession });
+  });
+
+  socket.on("livestream:join_room", () => {
+    socket.join("room:livestream");
+    const roomSize = io.sockets.adapter.rooms.get("room:livestream")?.size || 0;
+    io.to("room:livestream").emit("livestream:viewer_count", roomSize);
+    if (activeLivestreamSession && activeLivestreamSession.checkerSocketId) {
+      io.to(activeLivestreamSession.checkerSocketId).emit("livestream:viewer_joined", {
+        viewerSocketId: socket.id,
+        viewerEmail: socket.user?.email,
+        viewerName: socket.user?.name,
+      });
+    }
+  });
+
+  socket.on("livestream:leave_room", () => {
+    socket.leave("room:livestream");
+    const roomSize = io.sockets.adapter.rooms.get("room:livestream")?.size || 0;
+    io.to("room:livestream").emit("livestream:viewer_count", roomSize);
+    if (activeLivestreamSession && activeLivestreamSession.checkerSocketId) {
+      io.to(activeLivestreamSession.checkerSocketId).emit("livestream:viewer_left", {
+        viewerSocketId: socket.id,
+      });
+    }
+  });
+
+  socket.on("livestream:signal", ({ targetSocketId, signal }) => {
+    io.to(targetSocketId).emit("livestream:signal", {
+      senderSocketId: socket.id,
+      signal,
+    });
+  });
+
+  socket.on("livestream:checker_stop", () => {
+    activeLivestreamSession = null;
+    io.emit("livestream:status_update", { isLive: false, session: null });
+    io.to("room:livestream").emit("livestream:ended");
+  });
+
   socket.on("disconnect", () => {
+    if (activeLivestreamSession && activeLivestreamSession.checkerSocketId === socket.id) {
+      activeLivestreamSession = null;
+      io.emit("livestream:status_update", { isLive: false, session: null });
+      io.to("room:livestream").emit("livestream:ended");
+    }
+
     if (socket.user.email) {
       activeConnections.delete(socket.id);
       activeChatWidgetConnections.delete(socket.id);

@@ -32,7 +32,11 @@ function previewSelectedImage() {
 function onOpen() {
     const ui = SpreadsheetApp.getUi();
     ui.createMenu('Database Sync')
-        .addItem('⬇️ PULL: Database to Claim Form', 'pullDataToClaimForm')
+        .addItem('⬇️ PULL: Database to ClaimForm1 (Salaries)', 'pullDataToClaimForm')
+        .addItem('🎁 PULL: Database to Claimform2 (Referral Bonus)', 'pullDataToClaimForm2')
+        .addItem('👥 PULL: Database to X1.LOWERCOUNCIL', 'pullDataToLowerCouncil')
+        .addSeparator()
+        .addItem('📊 BULK UPDATE: Claimform2 Statuses to DB', 'bulkUpdateClaimForm2Statuses')
         .addSeparator()
         .addItem('💸 PUSH: Salary to Database (SINGLE ROW)', 'pushSalaryToDatabase')
         .addItem('🚀 PUSH ALL: All Salaries to Database', 'pushAllSalariesToDatabase')
@@ -45,6 +49,10 @@ function onOpen() {
         .addItem('🔧 AUTO-FIX: Wrong Emails', 'fixIncorrectEmails')
         .addItem('Preview Selected Image', 'previewSelectedImage')
         .addToUi();
+
+    if (typeof createReferralBonusMenu === "function") {
+        createReferralBonusMenu(ui);
+    }
 }
 
 /**
@@ -250,7 +258,12 @@ function pullDataToClaimForm(isAuto = false) {
         let dbHistoryAll = JSON.parse(historyRes.getContentText());
         if (!Array.isArray(dbHistoryAll)) dbHistoryAll = [];
         // Filter in-memory by _note1 === t3Value
-        let dbHistory = dbHistoryAll.filter(r => String((r.rawComputation || {})._note1 || "").trim() === t3Value.trim());
+        // Filter in-memory by _note1 === t3Value, excluding referral bonus claims (handled by Claimform2)
+        let dbHistory = dbHistoryAll.filter(r => {
+            const raw = r.rawComputation || {};
+            if (String(raw.type || "").toLowerCase() === "referral_bonus") return false;
+            return String(raw._note1 || "").trim() === t3Value.trim();
+        });
 
         const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("ClaimForm1");
         if (!sheet) return ui.alert("Error: 'ClaimForm1' sheet not found.");
@@ -378,7 +391,8 @@ function pushSalaryToDatabase() {
     const sheet = ss.getActiveSheet();
     const sheetName = sheet.getName();
 
-    if (sheetName !== "FINAL" && sheetName !== "X1.INNERCOUNCIL") return ui.alert("Action Denied: Only for 'FINAL' or 'X1.INNERCOUNCIL' tabs.");
+    const isCouncilTab = sheetName.toUpperCase().includes("INNERCOUNCIL") || sheetName.toUpperCase().includes("LOWERCOUNCIL");
+    if (sheetName !== "FINAL" && !isCouncilTab) return ui.alert("Action Denied: Only for 'FINAL', 'X1.INNERCOUNCIL', or 'X1.LOWERCOUNCIL' tabs.");
 
     const activeRow = sheet.getActiveCell().getRow();
     if (activeRow === 1) return ui.alert("Please select a user row.");
@@ -559,7 +573,8 @@ function executePushAll(enforceMinimum) {
     const sheet = ss.getActiveSheet();
     const sheetName = sheet.getName();
 
-    if (sheetName !== "FINAL" && sheetName !== "X1.INNERCOUNCIL") return ui.alert("Action Denied: Only for 'FINAL' or 'X1.INNERCOUNCIL' tabs.");
+    const isCouncilTab = sheetName.toUpperCase().includes("INNERCOUNCIL") || sheetName.toUpperCase().includes("LOWERCOUNCIL");
+    if (sheetName !== "FINAL" && !isCouncilTab) return ui.alert("Action Denied: Only for 'FINAL', 'X1.INNERCOUNCIL', or 'X1.LOWERCOUNCIL' tabs.");
 
     const finalSheet = ss.getSheetByName("FINAL");
     const t3Value = finalSheet ? String(finalSheet.getRange("T3").getValue()).trim() : "";
@@ -893,7 +908,8 @@ function executeForcePush(enforceMinimum) {
     const sheet = ss.getActiveSheet();
     const sheetName = sheet.getName();
 
-    if (sheetName !== "FINAL" && sheetName !== "X1.INNERCOUNCIL") return ui.alert("Action Denied: Only for 'FINAL' or 'X1.INNERCOUNCIL' tabs.");
+    const isCouncilTab = sheetName.toUpperCase().includes("INNERCOUNCIL") || sheetName.toUpperCase().includes("LOWERCOUNCIL");
+    if (sheetName !== "FINAL" && !isCouncilTab) return ui.alert("Action Denied: Only for 'FINAL', 'X1.INNERCOUNCIL', or 'X1.LOWERCOUNCIL' tabs.");
 
     const finalSheet = ss.getSheetByName("FINAL");
     const t3Value = finalSheet ? String(finalSheet.getRange("T3").getValue()).trim() : "";
@@ -1197,6 +1213,42 @@ function sendPayoutSentNotices_(baseUrl, headers, rows) {
 }
 
 /**
+ * MOP SNAPSHOT
+ * The payee name + account number on file at the moment a payout becomes "Sent".
+ * Written once to "MOP Name" (AN) / "MOP Account Number" (AO) and never refreshed by
+ * the pull, so it stays a fixed log even if the member changes their MOP later.
+ */
+// Returns { lowercasedEmail: { mopName, mopAccount } } from PaymentDetails.
+function getMopSnapshots_(baseUrl, headers, emails) {
+    const byEmail = {};
+    const unique = [...new Set(emails.map(e => String(e || "").trim()).filter(Boolean))];
+    const CHUNK = 20; // keeps each URL well under Apps Script's ~2KB limit
+    for (let i = 0; i < unique.length; i += CHUNK) {
+        const list = unique.slice(i, i + CHUNK).map(e => `"${e}"`).join(",");
+        const url = baseUrl + `/PaymentDetails?email=in.(${encodeURIComponent(list)})&select=email,payeeName,lastName,payeeUid`;
+        const res = UrlFetchApp.fetch(url, { method: "GET", headers: headers, muteHttpExceptions: true });
+        if (res.getResponseCode() !== 200) {
+            logSyncActivity("MOP_SNAPSHOT_LOOKUP_FAIL", res.getContentText());
+            continue;
+        }
+        JSON.parse(res.getContentText()).forEach(p => {
+            byEmail[String(p.email).trim().toLowerCase()] = {
+                mopName: [p.payeeName, p.lastName].filter(Boolean).join(" "),
+                mopAccount: p.payeeUid || ""
+            };
+        });
+    }
+    return byEmail;
+}
+
+// Writes the snapshot to a row. Account is written as text so long numbers / leading zeros survive.
+function writeMopSnapshot_(sheet, row, cols, snap) {
+    if (!snap) return;
+    sheet.getRange(row, cols.mopNameCol).setValue(snap.mopName);
+    sheet.getRange(row, cols.mopAccountCol).setNumberFormat("@").setValue(snap.mopAccount);
+}
+
+/**
  * Helper to fetch "Whose Bank?", "Who Sent?", and "MOP" values from the active sheet.
  * Primarily checks cells A3:B3 (Whose Bank?), A4:B4 (Who Sent?), and A5:B5 (MOP).
  * Supports fallback scanning of top rows (A1:B11) if rows have moved.
@@ -1269,14 +1321,17 @@ function getWhoseBankAndWhoSent_(sheet, row = null) {
 
 /**
  * Helper to get 1-based column indices for "Whose Bank?" (Column AK / 37),
- * "Who Sent?" (Column AL / 38), and "MOP" (Column AM / 39).
+ * "Who Sent?" (Column AL / 38), "MOP" (Column AM / 39),
+ * and the sent-time snapshot "MOP Name" (Column AN / 40) / "MOP Account Number" (Column AO / 41).
  */
 function getBankAndSenderColIndices_(sheet, headers) {
-    let whoseBankCol = 37; // Default Column AK
-    let whoSentCol = 38;   // Default Column AL
-    let mopCol = 39;       // Default Column AM
+    let whoseBankCol = 37;  // Default Column AK
+    let whoSentCol = 38;    // Default Column AL
+    let mopCol = 39;        // Default Column AM
+    let mopNameCol = 40;    // Default Column AN
+    let mopAccountCol = 41; // Default Column AO
 
-    const lastCol = Math.max(sheet.getLastColumn(), 39);
+    const lastCol = Math.max(sheet.getLastColumn(), 41);
     const headerRow = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
 
     for (let i = 0; i < headerRow.length; i++) {
@@ -1285,36 +1340,54 @@ function getBankAndSenderColIndices_(sheet, headers) {
             whoseBankCol = i + 1;
         } else if (h.includes("who sent") || h.includes("sent by")) {
             whoSentCol = i + 1;
-        } else if (h === "mop" || (h.startsWith("mop") && !h.includes("name"))) {
+        } else if (h.startsWith("mop") && h.includes("account")) {
+            mopAccountCol = i + 1;
+        } else if (h.startsWith("mop") && h.includes("name")) {
+            // Column AF is also "MOP Name" (live from the pull) — only take the one past "MOP"
+            if (i + 1 > mopCol) mopNameCol = i + 1;
+        } else if (h === "mop" || h.startsWith("mop")) {
             mopCol = i + 1;
         }
     }
 
-    return { whoseBankCol, whoSentCol, mopCol };
+    return { whoseBankCol, whoSentCol, mopCol, mopNameCol, mopAccountCol };
 }
 
 function onStatusEdit(e) {
     if (!e) return;
 
     const sheet = e.source.getActiveSheet();
+    const sheetName = sheet.getName().toLowerCase();
     const range = e.range;
     const col = range.getColumn();
     const row = range.getRow();
 
-    if (row === 1) return;
+    // Data rows in both ClaimForm1 and Claimform2 start at Row 12 (rows 1-11 are headers & controls)
+    if (row < 12) return;
 
+    // 🔹 DELEGATE CLAIMFORM2 TO claimform2.gs
+    if (sheetName.includes("claimform2")) {
+        if (typeof onClaimForm2StatusEdit === "function") {
+            return onClaimForm2StatusEdit(e);
+        }
+        return;
+    }
+
+    // -------------------------------------------------------------
+    // CLAIMFORM 1 (SALARIES) LOGIC ONLY
+    // -------------------------------------------------------------
     const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
     let statusColIdx = -1;
+
     for (let i = 0; i < headers.length; i++) {
         if (String(headers[i]).toLowerCase().includes("status") && !String(headers[i]).toLowerCase().includes("push")) {
             statusColIdx = i + 1;
             break;
         }
     }
-
-    // Fallback: If Status column wasn't detected by header text but user edited Column I (9)
-    if (statusColIdx === -1 && col === 9) {
-        statusColIdx = 9;
+    // Fallback: If Status column wasn't detected by header text but user edited Column I (9) or Column H (8)
+    if (statusColIdx === -1 && (col === 9 || col === 8)) {
+        statusColIdx = col;
     }
 
     if (statusColIdx === -1 || col !== statusColIdx) return;
@@ -1325,11 +1398,16 @@ function onStatusEdit(e) {
     const wasAlreadySent = oldStatus === "sent";
 
     let rowId = null;
-    for (let c = 9; c <= 20; c++) {
-        const val = String(sheet.getRange(row, c).getValue() || "").trim();
-        if (val.length === 36 && val.split("-").length === 5) {
-            rowId = val;
-            break;
+    const valT = String(sheet.getRange(row, 20).getValue() || "").trim();
+    if (valT.length === 36 && valT.split("-").length === 5) {
+        rowId = valT;
+    } else {
+        for (let c = 9; c <= 20; c++) {
+            const val = String(sheet.getRange(row, c).getValue() || "").trim();
+            if (val.length === 36 && val.split("-").length === 5) {
+                rowId = val;
+                break;
+            }
         }
     }
 
@@ -1369,34 +1447,53 @@ function onStatusEdit(e) {
         });
 
         if (patchRes.getResponseCode() >= 200 && patchRes.getResponseCode() < 300) {
-            logSyncActivity("STATUS_CHANGE", `Updated ID ${rowId} status to '${newStatus}'`);
-            // Log "Sent When?" timestamp in Column AI (35) — only when status is "Sent"
-            if (isSent) {
-                sheet.getRange(row, 35).setValue(new Date().toLocaleString());
+            logSyncActivity("STATUS_CHANGE", `Updated ID ${rowId} status to '${newStatus}' in IncomeHistory`);
 
-                // Deduct from B2 and log in Column AJ (36) only if not already sent before this edit
+            // Log "Sent When?" timestamp and deduct remaining balance — only when status is "Sent"
+            if (isSent) {
+                const sentWhenCol = 35; // Col AI (35)
+                const remBalCol = 36;   // Col AJ (36)
+                const salaryCol = 3;    // Col C (3)
+
+                sheet.getRange(row, sentWhenCol).setValue(new Date().toLocaleString());
+
+                // Deduct from B2 and log in Remaining Bal column only if not already sent before this edit
                 if (!wasAlreadySent) {
-                    const salary = (parseCurrencyValue(sheet.getRange(row, 3).getValue()).value) || 0;
+                    const salary = (parseCurrencyValue(sheet.getRange(row, salaryCol).getValue()).value) || 0;
                     const b2Cell = sheet.getRange("B2");
                     const currentBal = (parseCurrencyValue(b2Cell.getValue()).value) || 0;
                     const newBal = currentBal - salary;
                     b2Cell.setValue(newBal);
-                    sheet.getRange(row, 36).setValue(newBal);
+                    sheet.getRange(row, remBalCol).setValue(newBal);
                 }
 
-                // Update Whose Bank? (Column AK / 37), Who Sent? (Column AL / 38), and MOP (Column AM / 39)
+                // Update Whose Bank?, Who Sent?, and MOP
                 const bankInfo = getWhoseBankAndWhoSent_(sheet, row);
                 const cols = getBankAndSenderColIndices_(sheet, headers);
-                if (bankInfo.whoseBank) {
-                    sheet.getRange(row, cols.whoseBankCol).setValue(bankInfo.whoseBank);
-                }
-                if (bankInfo.whoSent) {
-                    sheet.getRange(row, cols.whoSentCol).setValue(bankInfo.whoSent);
-                }
-                if (bankInfo.mop) {
-                    sheet.getRange(row, cols.mopCol).setValue(bankInfo.mop);
+                if (bankInfo.whoseBank) sheet.getRange(row, cols.whoseBankCol).setValue(bankInfo.whoseBank);
+                if (bankInfo.whoSent) sheet.getRange(row, cols.whoSentCol).setValue(bankInfo.whoSent);
+                if (bankInfo.mop) sheet.getRange(row, cols.mopCol).setValue(bankInfo.mop);
+
+                // Snapshot MOP Name (AN) / Account Number (AO)
+                if (becomingSent[rowId]) {
+                    const snaps = getMopSnapshots_(BASE_URL, headersObj, [becomingSent[rowId].email]);
+                    const snap = snaps[String(becomingSent[rowId].email).trim().toLowerCase()];
+                    if (snap) {
+                        writeMopSnapshot_(sheet, row, cols, snap);
+                    }
                 }
             }
+            const notified = sendPayoutSentNotices_(BASE_URL, headersObj, Object.values(becomingSent));
+            e.source.toast(`Successfully updated DB to ${newStatus}${notified ? " and notified the member" : ""}`, "Success");
+        } else {
+            logSyncActivity("STATUS_CHANGE_FAIL", `Failed ID ${rowId}: ${patchRes.getContentText()}`);
+            e.source.toast(`Failed to update DB: ${patchRes.getContentText()}`, "Error");
+        }
+    } catch (err) {
+        logSyncActivity("STATUS_CHANGE_ERROR", err.toString());
+        e.source.toast("Error syncing to DB: " + err.toString(), "Error");
+    }
+}
             const notified = sendPayoutSentNotices_(BASE_URL, headersObj, Object.values(becomingSent));
             e.source.toast(`Successfully updated DB to ${newStatus}${notified ? " and notified the member" : ""}`, "Success");
         } else {
@@ -1581,9 +1678,10 @@ function fixIncorrectEmails() {
     const sheet = ss.getActiveSheet();
     const sheetName = sheet.getName();
 
-    // 🔹 UPDATED: Added "RAWCOMPUTATION" to the allowed tabs
-    if (sheetName !== "FINAL" && sheetName !== "X1.INNERCOUNCIL" && sheetName !== "RAWCOMPUTATION") {
-        return ui.alert("Please run this on the FINAL, RAWCOMPUTATION, or X1.INNERCOUNCIL tab.");
+    // 🔹 UPDATED: Added "RAWCOMPUTATION", "X1.INNERCOUNCIL", and "X1.LOWERCOUNCIL" to the allowed tabs
+    const isCouncilTab = sheetName.toUpperCase().includes("INNERCOUNCIL") || sheetName.toUpperCase().includes("LOWERCOUNCIL");
+    if (sheetName !== "FINAL" && sheetName !== "RAWCOMPUTATION" && !isCouncilTab) {
+        return ui.alert("Please run this on the FINAL, RAWCOMPUTATION, X1.INNERCOUNCIL, or X1.LOWERCOUNCIL tab.");
     }
 
     const response = ui.alert('Confirm Auto-Fix', `This will check all emails in the ${sheetName} tab.\n\nIf it finds a Main Email, it will automatically replace it with the correct bitmappro email and log the change in the 'Sync Logs' tab.\n\nContinue?`, ui.ButtonSet.YES_NO);
@@ -1860,6 +1958,8 @@ function bulkUpdateAllStatuses() {
         let currentBal = (parseCurrencyValue(b2Cell.getValue()).value) || 0;
         const bankInfo = getWhoseBankAndWhoSent_(sheet);
         const cols = getBankAndSenderColIndices_(sheet, headersRow);
+        // MOP snapshot only for rows that weren't already Sent in the DB
+        const mopSnaps = getMopSnapshots_(BASE_URL, headers, Object.values(becomingSent).map(r => r.email));
 
         successRows.sort((a, b) => a - b);
         successRows.forEach(rowNum => {
@@ -1879,6 +1979,11 @@ function bulkUpdateAllStatuses() {
                 }
                 if (bankInfo.mop) {
                     sheet.getRange(rowNum, cols.mopCol).setValue(bankInfo.mop);
+                }
+
+                const sentRow = becomingSent[rowPatch.id];
+                if (sentRow) {
+                    writeMopSnapshot_(sheet, rowNum, cols, mopSnaps[String(sentRow.email).trim().toLowerCase()]);
                 }
             }
         });
@@ -1907,6 +2012,8 @@ function backfillSentLogs() {
     const ui = SpreadsheetApp.getUi();
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getActiveSheet();
+    const sheetName = sheet.getName().toLowerCase();
+    const isClaimform2 = sheetName.includes("claimform2");
 
     const response = ui.prompt(
         "Backfill Sent Logs",
@@ -1926,10 +2033,10 @@ function backfillSentLogs() {
     if (lastRow < 12) return ui.alert("No data rows found.");
 
     const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-    let statusColIdx = headers.findIndex(h => String(h).toUpperCase().includes("STATUS") && !String(h).toUpperCase().includes("PUSH"));
+    let statusColIdx = isClaimform2 ? 3 : headers.findIndex(h => String(h).toUpperCase().includes("STATUS") && !String(h).toUpperCase().includes("PUSH"));
     if (statusColIdx === -1) return ui.alert("Missing 'Status' column.");
 
-    const cols = getBankAndSenderColIndices_(sheet, headers);
+    const cols = isClaimform2 ? null : getBankAndSenderColIndices_(sheet, headers);
 
     let count = 0;
     for (let r = 12; r <= lastRow; r++) {
@@ -1938,24 +2045,27 @@ function backfillSentLogs() {
 
         const status = String(sheet.getRange(r, statusColIdx + 1).getValue() || "").trim().toLowerCase();
         if (status === "sent") {
-            const salary = (parseCurrencyValue(sheet.getRange(r, 3).getValue()).value) || 0;
+            const salaryCol = isClaimform2 ? 2 : 3;
+            const remBalCol = isClaimform2 ? 11 : 36;
+            const salary = (parseCurrencyValue(sheet.getRange(r, salaryCol).getValue()).value) || 0;
             currentBal -= salary;
-            sheet.getRange(r, 36).setValue(currentBal);
+            sheet.getRange(r, remBalCol).setValue(currentBal);
 
             const bankInfo = getWhoseBankAndWhoSent_(sheet, r);
-            if (bankInfo.whoseBank) {
-                sheet.getRange(r, cols.whoseBankCol).setValue(bankInfo.whoseBank);
-            }
-            if (bankInfo.whoSent) {
-                sheet.getRange(r, cols.whoSentCol).setValue(bankInfo.whoSent);
-            }
-            if (bankInfo.mop) {
-                sheet.getRange(r, cols.mopCol).setValue(bankInfo.mop);
+            if (isClaimform2) {
+                if (bankInfo.whoseBank) sheet.getRange(r, 12).setValue(bankInfo.whoseBank);
+                if (bankInfo.whoSent) sheet.getRange(r, 13).setValue(bankInfo.whoSent);
+                if (bankInfo.mop) sheet.getRange(r, 14).setValue(bankInfo.mop || sheet.getRange(r, 3).getValue());
+            } else {
+                if (bankInfo.whoseBank) sheet.getRange(r, cols.whoseBankCol).setValue(bankInfo.whoseBank);
+                if (bankInfo.whoSent) sheet.getRange(r, cols.whoSentCol).setValue(bankInfo.whoSent);
+                if (bankInfo.mop) sheet.getRange(r, cols.mopCol).setValue(bankInfo.mop);
             }
             count++;
         }
     }
 
     sheet.getRange("B2").setValue(currentBal);
-    ui.alert("Backfill Complete", `✅ Updated ${count} sent rows in Column AJ.\n\n💰 Bank Balance in B2 is now: ${currentBal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, ui.ButtonSet.OK);
+    const colName = isClaimform2 ? "Column K (Remaining Bal)" : "Column AJ";
+    ui.alert("Backfill Complete", `✅ Updated ${count} sent rows in ${colName}.\n\n💰 Bank Balance in B2 is now: ${currentBal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, ui.ButtonSet.OK);
 }

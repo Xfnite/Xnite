@@ -521,3 +521,45 @@ model ReferralWithdrawal {
   @@index([email, createdAt])
   @@index([status])
 }
+
+// Checker recorded sessions and uploaded video checks for VOD replay library
+model CheckRecording {
+  id           String   @id @default(dbgenerated("gen_random_uuid()"))
+  title        String
+  projectType  String   @default("Standard Building")
+  description  String?
+  checkerEmail String
+  checkerName  String
+  videoUrl     String
+  thumbnailUrl String?
+  durationSec  Int      @default(0)
+  qualities    String[] @default(["1080p", "720p", "360p"])
+  viewsCount   Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([checkerEmail])
+  @@index([projectType])
+  @@index([createdAt])
+}
+
+// Active or past live stream check rooms
+model LivestreamRoom {
+  id           String    @id @default(dbgenerated("gen_random_uuid()"))
+  title        String
+  projectType  String    @default("Standard Building")
+  checkerEmail String
+  checkerName  String
+  status       String    @default("idle")
+  streamUrl    String?
+  viewerLimit  Int       @default(10)
+  currentViewers Int     @default(0)
+  startedAt    DateTime?
+  endedAt      DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([checkerEmail])
+  @@index([status])
+}
+

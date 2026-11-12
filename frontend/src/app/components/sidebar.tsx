@@ -533,6 +533,51 @@ export default function Sidebar({
             </Link>
           )}
 
+          {/* Livestream - locked until training is passed */}
+          {isTrainingLocked ? (
+            <div className="flex items-center px-4 py-2.5 text-sm font-medium rounded-tr-xl rounded-bl-xl text-[#2F3E46]/40 dark:text-[#E0E1DD]/25 cursor-not-allowed select-none">
+              <svg
+                className="w-4 h-4 mr-2.5 flex-shrink-0"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+                />
+              </svg>
+              Livestream
+              <LockIcon />
+            </div>
+          ) : (
+            <Link
+              href="/livestream"
+              onClick={onClose}
+              className={`flex items-center px-4 py-2.5 text-sm font-medium transition-colors rounded-tr-xl rounded-bl-xl ${pathname === "/livestream" || pathname.startsWith("/livestream/")
+                ? "bg-black/5 dark:bg-[#1B263B] text-[#1F7A1F] dark:text-[#E0E1DD] shadow-sm"
+                : "text-[#2F3E46] dark:text-[#E0E1DD]/70 hover:bg-black/5 dark:hover:bg-[#1B263B]/50 hover:text-[#0D1B2A] dark:hover:text-[#E0E1DD]"
+                }`}
+            >
+              <svg
+                className="w-4 h-4 mr-2.5 flex-shrink-0"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
+                />
+              </svg>
+              Livestream
+            </Link>
+          )}
+
 
           <div className="mt-auto flex flex-col pt-1.5">
             {/* Sidebar Banner */}

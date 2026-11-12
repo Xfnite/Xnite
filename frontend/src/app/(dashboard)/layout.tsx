@@ -262,7 +262,8 @@ export default function DashboardLayout({
             pathname.startsWith("/wallet") ||
             pathname.startsWith("/ranking") ||
             pathname.startsWith("/attendance") ||
-            pathname.startsWith("/recruiter")
+            pathname.startsWith("/recruiter") ||
+            pathname.startsWith("/livestream")
           ) {
             if (!GATES.canAccessRoute(pathname, ctx)) {
               if (pathname.startsWith("/ranking") && !user.isRulesAndGuidelinesCompleted && !isDev) {
