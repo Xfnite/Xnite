@@ -37,10 +37,28 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-const SOCKET_URL =
-  process.env.NEXT_PUBLIC_SERVER_URL ||
-  process.env.NEXT_PUBLIC_SOCKET_URL ||
-  "http://localhost:3001";
+function getSocketUrl(): string {
+  if (typeof window !== "undefined") {
+    if (process.env.NEXT_PUBLIC_SERVER_URL && !process.env.NEXT_PUBLIC_SERVER_URL.includes("localhost")) {
+      return process.env.NEXT_PUBLIC_SERVER_URL;
+    }
+    if (process.env.NEXT_PUBLIC_SOCKET_URL && !process.env.NEXT_PUBLIC_SOCKET_URL.includes("localhost")) {
+      return process.env.NEXT_PUBLIC_SOCKET_URL;
+    }
+    const hostname = window.location.hostname;
+    if (hostname.includes("staging.xfnite.cloud")) {
+      return "https://staging-server.xfnite.cloud";
+    }
+    if (hostname.includes("xfnite.cloud")) {
+      return "https://server.xfnite.cloud";
+    }
+  }
+  return (
+    process.env.NEXT_PUBLIC_SERVER_URL ||
+    process.env.NEXT_PUBLIC_SOCKET_URL ||
+    "http://localhost:3001"
+  );
+}
 
 function getCookie(name: string): string | null {
   if (typeof document === "undefined") return null;
@@ -137,7 +155,7 @@ export default function LivestreamPage() {
   // Setup Socket.io connection for real-time live streaming
   useEffect(() => {
     const token = getCookie("xnite_session");
-    const socket = io(SOCKET_URL, {
+    const socket = io(getSocketUrl(), {
       auth: { token },
       transports: ["websocket", "polling"],
     });
@@ -146,6 +164,10 @@ export default function LivestreamPage() {
     socket.on("connect", () => {
       socket.emit("livestream:get_status");
       socket.emit("livestream:join_room");
+    });
+
+    socket.on("connect_error", (err) => {
+      console.warn("[Livestream Socket] Connection error:", err.message);
     });
 
     socket.on("livestream:stream_available", () => {

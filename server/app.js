@@ -37,11 +37,29 @@ const PORT = process.env.PORT || 3001;
 const allowedOrigins = [
   "http://localhost:3000",
   "https://app.xfnite.cloud",
+  "https://staging.xfnite.cloud",
   "https://xfinite.iaynomrah.cloud"
 ];
 
+function isOriginAllowed(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  if (/^https:\/\/([a-z0-9-]+\.)?xfnite\.cloud$/.test(origin)) return true;
+  if (/^http:\/\/localhost:[0-9]+$/.test(origin)) return true;
+  return false;
+}
+
 // Enable CORS and JSON parsing
-app.use(cors({ origin: allowedOrigins }));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (isOriginAllowed(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS blocked for origin: ${origin}`));
+    }
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ limit: "1mb", extended: true }));
 
@@ -66,6 +84,10 @@ function sanitizeText(text) {
 }
 
 
+
+app.get("/", (req, res) => {
+  res.json({ name: "Xfnite Backend Server", status: "online", time: new Date() });
+});
 
 app.get("/health", (req, res) => {
   res.json({ status: "ok", time: new Date() });
@@ -180,8 +202,15 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   maxHttpBufferSize: 1e7, // 10MB to allow large bulk message payloads
   cors: {
-    origin: allowedOrigins,
-    methods: ["GET", "POST"]
+    origin: (origin, callback) => {
+      if (isOriginAllowed(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`Socket CORS blocked for origin: ${origin}`));
+      }
+    },
+    methods: ["GET", "POST"],
+    credentials: true,
   }
 });
 
