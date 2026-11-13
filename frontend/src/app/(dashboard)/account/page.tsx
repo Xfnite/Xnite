@@ -76,6 +76,7 @@ export default function AccountPage() {
               group_id: u.group_id || null,
               db_teamId: u.team_id || null,
               db_groupId: u.group_id || null,
+              previousGingerAccounts: u.previousGingerAccounts || null,
             };
             setUserData(fallbackDetails);
             loadedDetails = fallbackDetails;
@@ -171,7 +172,14 @@ export default function AccountPage() {
               router.replace("/account");
             }
 
-            const isCompleted = !trigger && (accountResult.walkthroughCompleted || localStorage.getItem("account_walkthrough_completed") === "true");
+            const userTutProg = (activeUser as any)?.activeProjectsTutorialProgress as any;
+            const isCompleted =
+              !trigger &&
+              (userTutProg?.account_walkthrough_completed === true ||
+                userTutProg?.project_walkthrough_completed === true ||
+                accountResult?.walkthroughCompleted === true ||
+                localStorage.getItem("account_walkthrough_completed") === "true");
+
             if (!isCompleted) {
               const savedStep = localStorage.getItem("account_walkthrough_step");
               if (savedStep !== null) {
@@ -179,6 +187,11 @@ export default function AccountPage() {
               } else {
                 setWalkthroughStep(0);
               }
+            } else {
+              setWalkthroughStep(-1);
+              try {
+                localStorage.setItem("account_walkthrough_completed", "true");
+              } catch (e) {}
             }
           }
         }
@@ -470,6 +483,20 @@ export default function AccountPage() {
               </div>
             ) : (
               <div className="space-y-8">
+
+                {/* Expired Account Reset Notice */}
+                {((sessionUser?.previousGingerAccounts && Array.isArray(sessionUser.previousGingerAccounts) && sessionUser.previousGingerAccounts.length > 0) ||
+                  (userData?.previousGingerAccounts && Array.isArray(userData.previousGingerAccounts) && userData.previousGingerAccounts.length > 0)) &&
+                  (userData?.db_role === "applicant" || sessionUser?.role === "applicant") && (
+                    <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300 text-sm font-medium flex items-center gap-3">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 flex-shrink-0 text-amber-600 dark:text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10" />
+                        <line x1="12" y1="8" x2="12" y2="12" />
+                        <line x1="12" y1="16" x2="12.01" y2="16" />
+                      </svg>
+                      <span>Your account has expired. Please do the trainings again. Thank you!</span>
+                    </div>
+                )}
 
                 {/* Profile Grid */}
                 <div className={`grid grid-cols-1 md:grid-cols-2 gap-3 ${walkthroughStep >= 0 ? 'opacity-20 pointer-events-none' : ''

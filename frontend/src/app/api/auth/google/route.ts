@@ -5,6 +5,7 @@ import { signCookieValue } from "@/lib/signedCookie";
 import { withRateLimit } from "@/lib/rateLimit";
 import { splitFullName } from "@/lib/nameUtils";
 import { isApplicant } from "@/config/permissions";
+import { checkGingerAccountExpired, resetExpiredGingerUser } from "@/lib/gingerExpiredAccount";
 
 export const GET = withRateLimit(async (request: NextRequest) => {
   const { searchParams } = new URL(request.url);
@@ -193,23 +194,50 @@ export const GET = withRateLimit(async (request: NextRequest) => {
       const gingerPassword = existingUser.gingerPassword || existingUser.password;
       if (existingUser.isRegistered && gingerEmail && gingerPassword) {
         try {
-          const GINGER_BASE = process.env.NEXT_PUBLIC_GINGER_API_URL || "https://ginger.bitmappro.com";
-          const gingerRes = await fetch(`${GINGER_BASE}/bac/login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email: gingerEmail, password: gingerPassword }),
-          });
-          const gingerData = await gingerRes.json().catch(() => ({}));
+          const gingerCheck = await checkGingerAccountExpired(gingerEmail, gingerPassword);
 
-          if (gingerRes.ok && gingerData?.credential?.access_token) {
-            response.cookies.set("ginger_access_token", gingerData.credential.access_token, {
+          if (gingerCheck.isExpired) {
+            console.log(`[Google Auth] Ginger account ${gingerEmail} for user ${existingUser.email} is expired. Resetting user to applicant for training retry without onboarding or tutorials.`);
+            const resetResult = await resetExpiredGingerUser(existingUser);
+
+            const expiredResponse = NextResponse.redirect(`${origin}/account`);
+            expiredResponse.cookies.set("xnite_session", await signSessionToken(existingUser.email, true), {
+              httpOnly: false,
+              secure: process.env.NODE_ENV === "production",
+              sameSite: "lax",
+              path: "/",
+              maxAge: 60 * 60 * 24,
+            });
+            expiredResponse.cookies.set("pre_course_completed", "true", {
+              httpOnly: true,
+              secure: process.env.NODE_ENV === "production",
+              sameSite: "lax",
+              path: "/",
+              maxAge: 60 * 60 * 24 * 365,
+            });
+
+            if (resetResult.newGingerToken) {
+              expiredResponse.cookies.set("ginger_access_token", resetResult.newGingerToken, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === "production",
+                sameSite: "lax",
+                path: "/",
+                maxAge: 60 * 60 * 24,
+              });
+            } else {
+              expiredResponse.cookies.delete("ginger_access_token");
+            }
+
+            return expiredResponse;
+          }
+
+          if (gingerCheck.accessToken) {
+            response.cookies.set("ginger_access_token", gingerCheck.accessToken, {
               httpOnly: true,
               secure: process.env.NODE_ENV === "production",
               sameSite: "lax",
               path: "/",
             });
-          } else {
-            console.error("Ginger login failed (Google route):", gingerRes.status, gingerData);
           }
         } catch (gingerErr) {
           console.error("Ginger login failed during Google OAuth:", gingerErr);

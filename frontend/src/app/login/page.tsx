@@ -70,8 +70,17 @@ function LoginPageInner() {
             JSON.stringify(result.data),
           );
         }
+        if ((result as any).accountWalkthroughCompleted) {
+          try {
+            localStorage.setItem("account_walkthrough_completed", "true");
+            localStorage.setItem("xfnite_account_visited", "true");
+            localStorage.setItem("xfnite_chat_visited", "true");
+            localStorage.setItem("xfnite_facebook_visited", "true");
+            localStorage.setItem("xfnite_projects_visited", "true");
+          } catch (e) {}
+        }
         const requestedRedirect = searchParams.get("redirect");
-        if (isSafeRedirectPath(requestedRedirect)) {
+        if (isSafeRedirectPath(requestedRedirect) && requestedRedirect !== "/dashboard") {
           router.push(requestedRedirect);
         } else if (result.redirect) {
           router.push(result.redirect);

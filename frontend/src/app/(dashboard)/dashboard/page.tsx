@@ -319,6 +319,16 @@ export default function OnboardingDashboardPage() {
         return;
       }
 
+      // If user has already completed onboarding/dashboard, redirect away from onboarding
+      if (user?.isDashboardCompleted && !isPreview) {
+        import("@/app/actions/auth").then(({ checkStandardBuildingPassedAction }) => {
+          checkStandardBuildingPassedAction().then((passed) => {
+            router.replace(passed ? "/project" : "/account");
+          });
+        });
+        return;
+      }
+
       if (user?.isRegistered) setIsRegistered(true);
       if (user?.email) setUserEmail(user.email);
       if (user?.onboardingProgress) setDbProgress(user.onboardingProgress);
@@ -810,7 +820,10 @@ export default function OnboardingDashboardPage() {
       // noop — handled below
     } else {
       if (progress.onboardingComplete && !isPreview) {
-        return <CompletionBanner onNavigate={() => router.push(isStandardBuildingPassed ? "/project" : "/account?trigger_walkthrough=true")} isStandardBuildingPassed={isStandardBuildingPassed} />;
+        const hasTutCompleted = (dbProgress as any)?.activeProjectsTutorialProgress?.account_walkthrough_completed === true ||
+          (typeof window !== "undefined" && localStorage.getItem("account_walkthrough_completed") === "true");
+        const accountTarget = hasTutCompleted ? "/account" : "/account?trigger_walkthrough=true";
+        return <CompletionBanner onNavigate={() => router.push(isStandardBuildingPassed ? "/project" : accountTarget)} isStandardBuildingPassed={isStandardBuildingPassed} />;
       }
       return (
         <WelcomeCard

@@ -493,6 +493,14 @@ export async function getMyPerformanceLogsAction(options: { includeAllLogs?: boo
     user.email?.trim()
   ].filter(Boolean) as string[];
 
+  const previousAccounts = (user as any).previousGingerAccounts;
+  if (Array.isArray(previousAccounts)) {
+    for (const prev of previousAccounts) {
+      if (prev?.gingerUsername?.trim()) names.push(prev.gingerUsername.trim());
+      if (prev?.gingerEmail?.trim()) names.push(prev.gingerEmail.trim());
+    }
+  }
+
   try {
     const [myLogs, allLogs, dbUser, platformStats] = await Promise.all([
       prisma.workLog.findMany({
@@ -755,6 +763,7 @@ export async function getUserSoftwareAccountsFromDbAction() {
         trainings: true,
         group_id: true,
         team_id: true,
+        previousGingerAccounts: true,
       }
     });
 

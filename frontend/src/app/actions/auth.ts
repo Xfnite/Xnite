@@ -14,6 +14,7 @@ import { isDemoGingerEmail } from "@/lib/gingerDemo";
 import { toUserFacingError } from "@/lib/userFacingError";
 import { findReferalFor } from "@/lib/referrers";
 import { splitFullName } from "@/lib/nameUtils";
+import { checkGingerAccountExpired, resetExpiredGingerUser } from "@/lib/gingerExpiredAccount";
 
 const GINGER_BASE = process.env.NEXT_PUBLIC_GINGER_API_URL || "https://ginger.bitmappro.com";
 const GINGER_LOGIN_ENDPOINT = `${GINGER_BASE}/bac/login`;
@@ -65,15 +66,63 @@ export async function loginAction(formData: { email: string; password: string })
     // 2️⃣ Forward ginger credentials to the real Ginger login endpoint (if reachable)
     let gingerResOk = false;
     let gingerData: any = {};
+    let isGingerExpired = false;
 
     try {
-      const gingerRes = await fetch(GINGER_LOGIN_ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: gingerEmail, password: gingerPassword }),
-      });
-      gingerResOk = gingerRes.ok;
-      gingerData = await gingerRes.json().catch(() => ({}));
+      const gingerCheck = await checkGingerAccountExpired(gingerEmail, gingerPassword);
+      isGingerExpired = gingerCheck.isExpired;
+      gingerData = gingerCheck.gingerData || {};
+      if (gingerCheck.accessToken) {
+        gingerResOk = true;
+        gingerData.credential = { access_token: gingerCheck.accessToken };
+      }
+
+      if (isGingerExpired) {
+        console.log(`[loginAction] Ginger account ${gingerEmail} for user ${user.email} is expired. Resetting user to applicant for training retry without onboarding or tutorials.`);
+        const resetResult = await resetExpiredGingerUser(user);
+
+        if (resetResult.newGingerToken) {
+          cookieStore.set({
+            name: "ginger_access_token",
+            value: resetResult.newGingerToken,
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "lax",
+            path: "/",
+            maxAge: 60 * 60 * 24,
+          });
+        } else {
+          cookieStore.delete("ginger_access_token");
+        }
+
+        cookieStore.set({
+          name: "pre_course_completed",
+          value: "true",
+          httpOnly: true,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "lax",
+          path: "/",
+          maxAge: 60 * 60 * 24 * 365,
+        });
+
+        cookieStore.set({
+          name: "xnite_session",
+          value: await signSessionToken(user.email, true),
+          httpOnly: false,
+          secure: process.env.NODE_ENV === "production",
+          sameSite: "lax",
+          path: "/",
+          maxAge: 60 * 60 * 24,
+        });
+
+        return {
+          success: true,
+          data: resetResult.newGingerData || {},
+          hasCompletedPreCourse: true,
+          redirect: "/account",
+          accountWalkthroughCompleted: true,
+        };
+      }
 
       if (!gingerResOk) {
         console.warn("Login to ginger failed, continuing to dashboard without ginger session:", gingerData?.error ?? gingerData);
@@ -151,7 +200,11 @@ export async function loginAction(formData: { email: string; password: string })
       }
     }
 
-    return { success: true, data: safeData, hasCompletedPreCourse, redirect: "/dashboard" };
+    const redirectPath = user.isDashboardCompleted
+      ? (user.role !== "applicant" ? "/project" : "/account")
+      : "/dashboard";
+
+    return { success: true, data: safeData, hasCompletedPreCourse, redirect: redirectPath };
 
   } catch (err) {
     console.error("Login action error:", err);
@@ -159,10 +212,17 @@ export async function loginAction(formData: { email: string; password: string })
   }
 }
 
-// An applicant with payout history is a former labeler who was given a new Ginger
-// account on reactivation (activateUsersAction) to redo the training tasks. They may
-// log in while hiring is closed.
+// An applicant with payout history or prior Ginger accounts is a former labeler who was
+// given a new Ginger account on reactivation or reset to redo the training tasks.
+// They may log in while hiring is closed.
 async function isGingerResetApplicant(email: string): Promise<boolean> {
+  const user = await prisma.user.findUnique({
+    where: { email },
+    select: { previousGingerAccounts: true },
+  });
+  if (user?.previousGingerAccounts && Array.isArray(user.previousGingerAccounts) && (user.previousGingerAccounts as any[]).length > 0) {
+    return true;
+  }
   const paid = await prisma.incomeHistory.findFirst({ where: { email }, select: { id: true } });
   return !!paid;
 }
@@ -188,7 +248,7 @@ export async function getSessionUser() {
     if (!email) return null;
     const user = await prisma.user.findUnique({
       where: { email },
-      select: { id: true, username: true, name: true, email: true, firstName: true, lastName: true, isRegistered: true, isDashboardCompleted: true, onboardingProgress: true, isRulesAndGuidelinesCompleted: true, hasClickedLandCoverTraining: true, hasClickedTransportationTraining: true, activeProjectsTutorialProgress: true, role: true, linkedRecruiterEmail: true, gingerUsername: true, group_id: true, team_id: true, createdAt: true, hadProjectBefore: true, hasAgreedToTerms: true },
+      select: { id: true, username: true, name: true, email: true, firstName: true, lastName: true, isRegistered: true, isDashboardCompleted: true, onboardingProgress: true, isRulesAndGuidelinesCompleted: true, hasClickedLandCoverTraining: true, hasClickedTransportationTraining: true, activeProjectsTutorialProgress: true, role: true, linkedRecruiterEmail: true, gingerUsername: true, gingerEmail: true, previousGingerAccounts: true, group_id: true, team_id: true, createdAt: true, hadProjectBefore: true, hasAgreedToTerms: true },
     });
     if (!user) return null;
     const gingerToken = cookieStore.get("ginger_access_token")?.value || null;

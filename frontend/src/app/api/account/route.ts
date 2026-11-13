@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { redis, isRedisReady } from "@/lib/redis";
 import { verifySessionToken } from "@/lib/jwt";
 import { withRateLimit } from "@/lib/rateLimit";
+import { isGingerExpiredResponse, resetExpiredGingerUser } from "@/lib/gingerExpiredAccount";
 
 const GINGER_BASE = process.env.NEXT_PUBLIC_GINGER_API_URL || "https://ginger.bitmappro.com";
 const ACCOUNT_ENDPOINT = `${GINGER_BASE}/bac/eam/sale/user/detail`;
@@ -89,6 +90,23 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       try {
         const user = await prisma.user.findUnique({ where: { email: sessionEmail } });
         if (user) {
+          if (isGingerExpiredResponse(data)) {
+            console.log(`[/api/account] User ${user.email} Ginger account is expired. Auto-resetting for training.`);
+            const resetResult = await resetExpiredGingerUser(user);
+            if (resetResult.newGingerToken) {
+              cookieStore.set({
+                name: "ginger_access_token",
+                value: resetResult.newGingerToken,
+                httpOnly: true,
+                secure: process.env.NODE_ENV === "production",
+                sameSite: "lax",
+                path: "/",
+                maxAge: 60 * 60 * 24,
+              });
+            }
+            return await buildLocalFallbackResponse(sessionEmail);
+          }
+
           target.db_name = user.name;
           target.db_email = user.email;
           target.db_username = user.username;
@@ -149,18 +167,27 @@ export const POST = withRateLimit(async (request: NextRequest) => {
             String(target.team_name).trim() !== ""
           );
 
-          // If Ginger indicates no valid team ID or no valid team name, ensure team is cleared
-          const effectiveTeamId = (newTeamId && hasValidTeamName) ? newTeamId : (hasValidTeamName ? newTeamId : null);
-          if (!hasValidTeamName || !effectiveTeamId) {
+          // If Ginger returns a new valid positive team/group, update them.
+          // Otherwise, preserve the user's existing team_id and group_id from DB so renewals don't wipe them.
+          const effectiveTeamId = (newTeamId && hasValidTeamName) ? newTeamId : (user.team_id || null);
+          const effectiveGroupId = newGroupId !== null ? newGroupId : (user.group_id || null);
+
+          if (!hasValidTeamName && !user.team_id) {
             target.team_id = null;
             target.origin_team_id = null;
             target.team_name = null;
             target.team_checker_link = null;
             target.team_judger_link = null;
+          } else if (effectiveTeamId) {
+            target.team_id = effectiveTeamId;
+          }
+
+          if (effectiveGroupId) {
+            target.group_id = effectiveGroupId;
           }
 
           const teamChanged = user.team_id !== effectiveTeamId;
-          const groupChanged = user.group_id !== newGroupId;
+          const groupChanged = user.group_id !== effectiveGroupId;
           const labelerIdChanged = Boolean(firstLabelerId && user.labelerId !== firstLabelerId);
           const labelerPassChanged = Boolean(firstLabelerPassword && user.labelerPassword !== firstLabelerPassword);
 
@@ -168,14 +195,14 @@ export const POST = withRateLimit(async (request: NextRequest) => {
             await prisma.user.update({
               where: { email: sessionEmail },
               data: {
-                group_id: newGroupId,
+                group_id: effectiveGroupId,
                 team_id: effectiveTeamId,
                 ...(firstLabelerId ? { labelerId: firstLabelerId } : {}),
                 ...(firstLabelerPassword ? { labelerPassword: firstLabelerPassword } : {})
               }
             });
             user.team_id = effectiveTeamId;
-            user.group_id = newGroupId;
+            user.group_id = effectiveGroupId;
           }
 
           target.db_groupId = user.group_id;
@@ -228,9 +255,21 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     }
 
     let walkthroughCompleted = false;
-    if (sessionEmail && isRedisReady()) {
-      const val = await redis.get(`walkthrough_completed:${sessionEmail}`);
-      walkthroughCompleted = val === "true";
+    if (sessionEmail) {
+      if (isRedisReady()) {
+        const val = await redis.get(`walkthrough_completed:${sessionEmail}`);
+        walkthroughCompleted = val === "true";
+      }
+      if (!walkthroughCompleted) {
+        const dbUser = await prisma.user.findUnique({
+          where: { email: sessionEmail },
+          select: { activeProjectsTutorialProgress: true },
+        });
+        const tutProg = dbUser?.activeProjectsTutorialProgress as any;
+        if (tutProg?.account_walkthrough_completed === true || tutProg?.project_walkthrough_completed === true) {
+          walkthroughCompleted = true;
+        }
+      }
     }
 
     const responsePayload = {
@@ -288,9 +327,21 @@ async function buildLocalFallbackResponse(sessionEmail: string) {
   koalaUserDetails.facebookChangeUsed = priorReqs.some((r) => r.requestedFacebook);
 
   let walkthroughCompleted = false;
-  if (isRedisReady()) {
-    const val = await redis.get(`walkthrough_completed:${sessionEmail}`);
-    walkthroughCompleted = val === "true";
+  if (sessionEmail) {
+    if (isRedisReady()) {
+      const val = await redis.get(`walkthrough_completed:${sessionEmail}`);
+      walkthroughCompleted = val === "true";
+    }
+    if (!walkthroughCompleted) {
+      const dbUser = await prisma.user.findUnique({
+        where: { email: sessionEmail },
+        select: { activeProjectsTutorialProgress: true },
+      });
+      const tutProg = dbUser?.activeProjectsTutorialProgress as any;
+      if (tutProg?.account_walkthrough_completed === true || tutProg?.project_walkthrough_completed === true) {
+        walkthroughCompleted = true;
+      }
+    }
   }
 
   return NextResponse.json({

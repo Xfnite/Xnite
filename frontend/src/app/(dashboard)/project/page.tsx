@@ -45,8 +45,8 @@ export default function ProjectPage() {
         const isOldLabeler = (user as any).role?.toLowerCase() === "old labeler";
         const tutProgress = (user as any).activeProjectsTutorialProgress || {};
 
-        // Auto-complete for Old Labelers
-        const completed = isOldLabeler ? true : (tutProgress.project_walkthrough_completed === true);
+        // Auto-complete for Old Labelers or users with completed walkthroughs
+        const completed = isOldLabeler || tutProgress.project_walkthrough_completed === true || tutProgress.account_walkthrough_completed === true;
         setIsWalkthroughCompleted(completed);
 
         const trigger = searchParams.get("trigger_project_walkthrough");
