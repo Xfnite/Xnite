@@ -34,7 +34,8 @@ import {
   VolumeX,
   Trash2,
   Save,
-  Check
+  Check,
+  LogOut
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -121,6 +122,8 @@ export default function LivestreamPage() {
   const [useOwncastFeed, setUseOwncastFeed] = useState(false);
   const [isViewerMuted, setIsViewerMuted] = useState(true);
   const [isMicEnabled, setIsMicEnabled] = useState(true);
+  const [hasJoinedStream, setHasJoinedStream] = useState(false);
+  const [isConnectingStream, setIsConnectingStream] = useState(false);
 
   // Refs for media stream & recording
   const livePreviewRef = useRef<HTMLVideoElement>(null);
@@ -179,6 +182,41 @@ export default function LivestreamPage() {
     }
   }, [isCapturing]);
 
+  // Viewer manually joins live stream
+  const handleJoinStream = () => {
+    if (!socketRef.current) return;
+    setIsConnectingStream(true);
+    setHasJoinedStream(true);
+    socketRef.current.emit("livestream:join_room");
+    toast.info("Connecting to live audit inspection...");
+  };
+
+  // Viewer leaves live stream
+  const handleLeaveStream = () => {
+    if (socketRef.current) {
+      socketRef.current.emit("livestream:leave_room");
+    }
+    if (viewerPeerConnectionRef.current) {
+      viewerPeerConnectionRef.current.close();
+      viewerPeerConnectionRef.current = null;
+    }
+    viewerPendingCandidatesRef.current = [];
+    remoteStreamRef.current = null;
+    if (viewerVideoRef.current) {
+      viewerVideoRef.current.srcObject = null;
+    }
+    setHasJoinedStream(false);
+    setIsConnectingStream(false);
+    toast.info("Left live stream.");
+  };
+
+  // Automatically disconnect from live stream if viewer switches away from "live" tab
+  useEffect(() => {
+    if (activeTab !== "live" && hasJoinedStream) {
+      handleLeaveStream();
+    }
+  }, [activeTab]);
+
   // Setup Socket.io connection for real-time live streaming
   useEffect(() => {
     const token = getCookie("xnite_session");
@@ -190,7 +228,6 @@ export default function LivestreamPage() {
 
     socket.on("connect", () => {
       socket.emit("livestream:get_status");
-      socket.emit("livestream:join_room");
     });
 
     socket.on("connect_error", (err) => {
@@ -198,18 +235,19 @@ export default function LivestreamPage() {
     });
 
     socket.on("livestream:stream_available", () => {
-      // Re-join room to request WebRTC stream from active checker
-      socket.emit("livestream:join_room");
+      socket.emit("livestream:get_status");
+      toast.info("A checker has started a live audit inspection! Click 'Watch Live Stream' to view.");
     });
 
     socket.on("livestream:status_update", ({ isLive, session }) => {
       if (isLive && session) {
         setLiveSession(session);
-        socket.emit("livestream:join_room");
       } else {
         setLiveSession(null);
         remoteStreamRef.current = null;
         if (viewerVideoRef.current) viewerVideoRef.current.srcObject = null;
+        setHasJoinedStream(false);
+        setIsConnectingStream(false);
       }
     });
 
@@ -277,6 +315,11 @@ export default function LivestreamPage() {
 
         pc.oniceconnectionstatechange = () => {
           console.log(`[Viewer ICE] state: ${pc.iceConnectionState}`);
+          if (pc.iceConnectionState === "connected") {
+            setIsConnectingStream(false);
+          } else if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
+            setIsConnectingStream(false);
+          }
         };
 
         pc.ontrack = (event) => {
@@ -285,6 +328,7 @@ export default function LivestreamPage() {
             stream = new MediaStream([event.track]);
           }
           remoteStreamRef.current = stream;
+          setIsConnectingStream(false);
           if (viewerVideoRef.current) {
             viewerVideoRef.current.srcObject = stream;
             viewerVideoRef.current.play().catch(() => {});
@@ -361,9 +405,15 @@ export default function LivestreamPage() {
         viewerPeerConnectionRef.current.close();
         viewerPeerConnectionRef.current = null;
       }
+      setHasJoinedStream(false);
+      setIsConnectingStream(false);
+      toast.info("The live inspection session has ended.");
     });
 
     return () => {
+      if (viewerPeerConnectionRef.current) {
+        viewerPeerConnectionRef.current.close();
+      }
       socket.disconnect();
     };
   }, []);
@@ -796,61 +846,126 @@ export default function LivestreamPage() {
                 <div className="relative aspect-video w-full bg-black rounded-2xl overflow-hidden shadow-2xl border border-black/10 dark:border-white/10 group flex items-center justify-center">
                   {/* Mode A: Real-Time WebRTC In-Browser Stream when a Checker is LIVE */}
                   {liveSession && !useOwncastFeed ? (
-                    <div className="relative w-full h-full bg-black flex items-center justify-center">
-                      <video
-                        ref={(el) => {
-                          viewerVideoRef.current = el;
-                          if (el) {
-                            el.muted = isViewerMuted;
-                            el.defaultMuted = isViewerMuted;
-                            if (remoteStreamRef.current && el.srcObject !== remoteStreamRef.current) {
-                              el.srcObject = remoteStreamRef.current;
-                              el.play().catch(() => {});
+                    hasJoinedStream ? (
+                      <div className="relative w-full h-full bg-black flex items-center justify-center">
+                        <video
+                          ref={(el) => {
+                            viewerVideoRef.current = el;
+                            if (el) {
+                              el.muted = isViewerMuted;
+                              el.defaultMuted = isViewerMuted;
+                              if (remoteStreamRef.current && el.srcObject !== remoteStreamRef.current) {
+                                el.srcObject = remoteStreamRef.current;
+                                el.play().catch(() => {});
+                              }
                             }
-                          }
-                        }}
-                        autoPlay
-                        playsInline
-                        muted={isViewerMuted}
-                        controls
-                        onLoadedMetadata={(e) => {
-                          (e.target as HTMLVideoElement).play().catch(() => {});
-                        }}
-                        onCanPlay={(e) => {
-                          (e.target as HTMLVideoElement).play().catch(() => {});
-                        }}
-                        className="w-full h-full object-contain"
-                      />
-                      <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/90 text-white text-xs font-bold uppercase tracking-wider shadow-lg">
-                        <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                        LIVE: {liveSession.checkerName}
+                          }}
+                          autoPlay
+                          playsInline
+                          muted={isViewerMuted}
+                          controls
+                          onLoadedMetadata={(e) => {
+                            (e.target as HTMLVideoElement).play().catch(() => {});
+                          }}
+                          onCanPlay={(e) => {
+                            (e.target as HTMLVideoElement).play().catch(() => {});
+                          }}
+                          className="w-full h-full object-contain"
+                        />
+                        <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/90 text-white text-xs font-bold uppercase tracking-wider shadow-lg">
+                          <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                          LIVE: {liveSession.checkerName}
+                        </div>
+
+                        <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              if (socketRef.current) {
+                                socketRef.current.emit("livestream:join_room");
+                                toast.info("Reconnecting live stream feed...");
+                              }
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-black/70 hover:bg-black/90 text-white text-xs font-semibold flex items-center gap-1.5 border border-white/20 transition-all cursor-pointer backdrop-blur-md"
+                            title="Click if stream is buffering or frozen"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            Reload
+                          </button>
+                          <button
+                            onClick={handleLeaveStream}
+                            className="px-3 py-1.5 rounded-xl bg-red-600/85 hover:bg-red-600 text-white text-xs font-semibold flex items-center gap-1.5 border border-white/20 transition-all cursor-pointer backdrop-blur-md shadow-lg"
+                            title="Leave live stream"
+                          >
+                            <LogOut className="w-3.5 h-3.5" />
+                            Leave
+                          </button>
+                        </div>
+
+                        {/* Connecting Overlay */}
+                        {isConnectingStream && !remoteStreamRef.current && (
+                          <div className="absolute inset-0 bg-black/75 backdrop-blur-xs flex flex-col items-center justify-center gap-3 z-20">
+                            <RefreshCw className="w-8 h-8 animate-spin text-[#55f761]" />
+                            <p className="text-white text-xs font-semibold">Connecting to checker's broadcast...</p>
+                          </div>
+                        )}
+
+                        {/* Unmute overlay button if muted */}
+                        {isViewerMuted && (
+                          <button
+                            onClick={unmuteViewer}
+                            className="absolute bottom-16 right-4 z-30 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-2xl flex items-center gap-2 cursor-pointer border border-white/20 hover:scale-105 transition-all"
+                          >
+                            <Volume2 className="w-4 h-4 animate-bounce" />
+                            Click to Unmute / Hear Checker 🔊
+                          </button>
+                        )}
                       </div>
+                    ) : (
+                      /* Live Broadcast In Progress - User Click to Join */
+                      <div className="relative w-full h-full bg-gradient-to-br from-[#060D14] via-[#0D1B2A] to-[#060D14] p-8 flex flex-col items-center justify-center text-center space-y-4">
+                        <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/20 border border-red-500/40 text-red-400 text-xs font-bold uppercase tracking-wider">
+                          <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+                          Live Quality Audit in Progress
+                        </div>
 
-                      <button
-                        onClick={() => {
-                          if (socketRef.current) {
-                            socketRef.current.emit("livestream:join_room");
-                            toast.info("Reconnecting live stream feed...");
-                          }
-                        }}
-                        className="absolute top-3 right-3 z-30 px-3 py-1.5 rounded-xl bg-black/70 hover:bg-black/90 text-white text-xs font-semibold flex items-center gap-1.5 border border-white/20 transition-all cursor-pointer backdrop-blur-md"
-                        title="Click if stream is buffering or frozen"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        Reload Feed
-                      </button>
+                        <div className="space-y-1.5 max-w-md">
+                          <h3 className="text-xl font-bold text-white">
+                            {liveSession.title || "Live Quality Audit Inspection"}
+                          </h3>
+                          <p className="text-xs text-white/70">
+                            Conducted by <span className="font-semibold text-white">{liveSession.checkerName}</span> &bull; {liveSession.projectType}
+                          </p>
+                          <div className="pt-1 flex items-center justify-center gap-2 text-xs text-white/50">
+                            <Users className="w-3.5 h-3.5" />
+                            <span>{liveViewerCount} {liveViewerCount === 1 ? "viewer" : "viewers"} watching</span>
+                          </div>
+                        </div>
 
-                      {/* Unmute overlay button if muted */}
-                      {isViewerMuted && (
-                        <button
-                          onClick={unmuteViewer}
-                          className="absolute bottom-16 right-4 z-30 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-2xl flex items-center gap-2 cursor-pointer border border-white/20 hover:scale-105 transition-all"
-                        >
-                          <Volume2 className="w-4 h-4 animate-bounce" />
-                          Click to Unmute / Hear Checker 🔊
-                        </button>
-                      )}
-                    </div>
+                        <div className="pt-2">
+                          <button
+                            onClick={handleJoinStream}
+                            disabled={isConnectingStream}
+                            className="px-6 py-3 rounded-xl bg-[#1F7A1F] dark:bg-[#55f761] hover:scale-105 active:scale-95 text-white dark:text-[#060D14] text-xs sm:text-sm font-bold shadow-2xl flex items-center gap-2 transition-all cursor-pointer"
+                          >
+                            {isConnectingStream ? (
+                              <>
+                                <RefreshCw className="w-4 h-4 animate-spin" />
+                                Connecting to Feed...
+                              </>
+                            ) : (
+                              <>
+                                <Play className="w-4 h-4 fill-current ml-0.5" />
+                                Watch Live Stream
+                              </>
+                            )}
+                          </button>
+                        </div>
+
+                        <p className="text-[11px] text-white/40">
+                          Click to join and receive real-time 1080p screen share &amp; audio
+                        </p>
+                      </div>
+                    )
                   ) : useOwncastFeed ? (
                     /* Mode B: Owncast HLS Iframe Feed */
                     <iframe
