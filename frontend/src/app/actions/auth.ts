@@ -14,7 +14,7 @@ import { isDemoGingerEmail } from "@/lib/gingerDemo";
 import { toUserFacingError } from "@/lib/userFacingError";
 import { findReferalFor } from "@/lib/referrers";
 import { splitFullName } from "@/lib/nameUtils";
-import { checkGingerAccountExpired, resetExpiredGingerUser } from "@/lib/gingerExpiredAccount";
+import { checkGingerAccountExpired, resetExpiredGingerUser, isExemptFromGingerExpiration } from "@/lib/gingerExpiredAccount";
 
 const GINGER_BASE = process.env.NEXT_PUBLIC_GINGER_API_URL || "https://ginger.bitmappro.com";
 const GINGER_LOGIN_ENDPOINT = `${GINGER_BASE}/bac/login`;
@@ -69,7 +69,11 @@ export async function loginAction(formData: { email: string; password: string })
     let isGingerExpired = false;
 
     try {
-      const gingerCheck = await checkGingerAccountExpired(gingerEmail, gingerPassword);
+      const isExempt = isExemptFromGingerExpiration(user.email, user.role);
+      const gingerCheck = isExempt
+        ? { isExpired: false, accessToken: null, gingerData: {} }
+        : await checkGingerAccountExpired(gingerEmail, gingerPassword, null, user.email, user.role);
+
       isGingerExpired = gingerCheck.isExpired;
       gingerData = gingerCheck.gingerData || {};
       if (gingerCheck.accessToken) {
@@ -77,8 +81,8 @@ export async function loginAction(formData: { email: string; password: string })
         gingerData.credential = { access_token: gingerCheck.accessToken };
       }
 
-      if (isGingerExpired) {
-        console.log(`[loginAction] Ginger account ${gingerEmail} for user ${user.email} is expired. Resetting user to applicant for training retry without onboarding or tutorials.`);
+      if (isGingerExpired && !isExempt) {
+        console.log(`[loginAction] Ginger account ${gingerEmail} for user ${user.email} is expired. Resetting user for training retry without onboarding or tutorials.`);
         const resetResult = await resetExpiredGingerUser(user);
 
         if (resetResult.newGingerToken) {

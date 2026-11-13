@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { redis, isRedisReady } from "@/lib/redis";
 import { verifySessionToken } from "@/lib/jwt";
 import { withRateLimit } from "@/lib/rateLimit";
-import { isGingerExpiredResponse, resetExpiredGingerUser } from "@/lib/gingerExpiredAccount";
+import { isGingerExpiredResponse, resetExpiredGingerUser, isExemptFromGingerExpiration } from "@/lib/gingerExpiredAccount";
 
 const GINGER_BASE = process.env.NEXT_PUBLIC_GINGER_API_URL || "https://ginger.bitmappro.com";
 const ACCOUNT_ENDPOINT = `${GINGER_BASE}/bac/eam/sale/user/detail`;
@@ -90,7 +90,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       try {
         const user = await prisma.user.findUnique({ where: { email: sessionEmail } });
         if (user) {
-          if (isGingerExpiredResponse(data)) {
+          if (isGingerExpiredResponse(data) && !isExemptFromGingerExpiration(user.email, user.role)) {
             console.log(`[/api/account] User ${user.email} Ginger account is expired. Auto-resetting for training.`);
             const resetResult = await resetExpiredGingerUser(user);
             if (resetResult.newGingerToken) {

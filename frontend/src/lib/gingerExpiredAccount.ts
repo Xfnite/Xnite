@@ -11,6 +11,21 @@ const GINGER_BASE = process.env.NEXT_PUBLIC_GINGER_API_URL || "https://ginger.bi
 const GINGER_LOGIN_ENDPOINT = `${GINGER_BASE}/bac/login`;
 const GINGER_USER_DETAIL_ENDPOINT = `${GINGER_BASE}/bac/eam/sale/user/detail`;
 
+export const EXEMPT_EXPIRED_EMAILS = new Set([
+  "iru.xfnite@gmail.com",
+]);
+
+export function isExemptFromGingerExpiration(email?: string | null, role?: string | null): boolean {
+  if (!email) return false;
+  const cleanEmail = email.trim().toLowerCase();
+  if (EXEMPT_EXPIRED_EMAILS.has(cleanEmail)) return true;
+  const cleanRole = (role || "").trim().toLowerCase();
+  if (cleanRole === "admin" || cleanRole === "inner council" || cleanRole === "superadmin" || cleanRole === "checker" || cleanRole === "judger") {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Checks if a Ginger API response indicates that the user's Ginger account is expired.
  */
@@ -33,8 +48,14 @@ export function isGingerExpiredResponse(data: any): boolean {
 export async function checkGingerAccountExpired(
   gingerEmail: string,
   gingerPassword: string,
-  existingAccessToken?: string | null
+  existingAccessToken?: string | null,
+  userEmail?: string | null,
+  userRole?: string | null
 ): Promise<{ isExpired: boolean; accessToken?: string | null; gingerData?: any }> {
+  if (isExemptFromGingerExpiration(userEmail || gingerEmail, userRole)) {
+    return { isExpired: false, accessToken: existingAccessToken, gingerData: null };
+  }
+
   let token = existingAccessToken || null;
   let gingerData: any = {};
 
@@ -92,6 +113,7 @@ export async function resetExpiredGingerUser(user: {
   id: string;
   email: string;
   name?: string | null;
+  role?: string | null;
   firstName?: string | null;
   lastName?: string | null;
   phone?: string | null;
@@ -109,6 +131,22 @@ export async function resetExpiredGingerUser(user: {
   const dbUser = await prisma.user.findUnique({
     where: { email: user.email },
   });
+
+  if (isExemptFromGingerExpiration(user.email, user.role || dbUser?.role)) {
+    console.log(`[resetExpiredGingerUser] User ${user.email} is exempt from expired resets.`);
+    return {
+      success: false,
+      signupSucceeded: false,
+      newGingerToken: null,
+      newGingerData: {},
+      finalGingerEmail: dbUser?.gingerEmail || user.gingerEmail || null,
+      finalGingerUsername: dbUser?.gingerUsername || user.gingerUsername || null,
+    };
+  }
+
+  // Preserve their role (e.g. labeler, old-labeler) so users are not demoted to applicant
+  const userCurrentRole = (dbUser?.role || user.role || "labeler").trim();
+  const targetRole = userCurrentRole === "applicant" ? "applicant" : userCurrentRole;
 
   const existingPrevious = Array.isArray(dbUser?.previousGingerAccounts)
     ? (dbUser?.previousGingerAccounts as any[])
@@ -277,7 +315,7 @@ export async function resetExpiredGingerUser(user: {
       where: { email: user.email },
       data: {
         status: "Active",
-        role: "applicant",
+        role: targetRole,
         gingerEmail: finalGingerEmail,
         gingerUsername: finalGingerUsername,
         gingerPassword: finalPassword,
@@ -297,8 +335,8 @@ export async function resetExpiredGingerUser(user: {
     prisma.training.deleteMany({ where: { userId: user.id } }),
     prisma.softwareCredential.upsert({
       where: { softwareUid: finalGingerEmail },
-      update: { role: "applicant", password: finalPassword },
-      create: { role: "applicant", softwareUid: finalGingerEmail, password: finalPassword },
+      update: { role: targetRole, password: finalPassword },
+      create: { role: targetRole, softwareUid: finalGingerEmail, password: finalPassword },
     }),
     prisma.directMessage.create({
       data: {

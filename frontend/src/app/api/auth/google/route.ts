@@ -5,7 +5,7 @@ import { signCookieValue } from "@/lib/signedCookie";
 import { withRateLimit } from "@/lib/rateLimit";
 import { splitFullName } from "@/lib/nameUtils";
 import { isApplicant } from "@/config/permissions";
-import { checkGingerAccountExpired, resetExpiredGingerUser } from "@/lib/gingerExpiredAccount";
+import { checkGingerAccountExpired, resetExpiredGingerUser, isExemptFromGingerExpiration } from "@/lib/gingerExpiredAccount";
 
 export const GET = withRateLimit(async (request: NextRequest) => {
   const { searchParams } = new URL(request.url);
@@ -194,10 +194,13 @@ export const GET = withRateLimit(async (request: NextRequest) => {
       const gingerPassword = existingUser.gingerPassword || existingUser.password;
       if (existingUser.isRegistered && gingerEmail && gingerPassword) {
         try {
-          const gingerCheck = await checkGingerAccountExpired(gingerEmail, gingerPassword);
+          const isExempt = isExemptFromGingerExpiration(existingUser.email, existingUser.role);
+          const gingerCheck = isExempt
+            ? { isExpired: false, accessToken: null }
+            : await checkGingerAccountExpired(gingerEmail, gingerPassword, null, existingUser.email, existingUser.role);
 
-          if (gingerCheck.isExpired) {
-            console.log(`[Google Auth] Ginger account ${gingerEmail} for user ${existingUser.email} is expired. Resetting user to applicant for training retry without onboarding or tutorials.`);
+          if (gingerCheck.isExpired && !isExempt) {
+            console.log(`[Google Auth] Ginger account ${gingerEmail} for user ${existingUser.email} is expired. Resetting user for training retry without onboarding or tutorials.`);
             const resetResult = await resetExpiredGingerUser(existingUser);
 
             const expiredResponse = NextResponse.redirect(`${origin}/account`);

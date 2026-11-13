@@ -487,7 +487,7 @@ export default function AccountPage() {
                 {/* Expired Account Reset Notice */}
                 {((sessionUser?.previousGingerAccounts && Array.isArray(sessionUser.previousGingerAccounts) && sessionUser.previousGingerAccounts.length > 0) ||
                   (userData?.previousGingerAccounts && Array.isArray(userData.previousGingerAccounts) && userData.previousGingerAccounts.length > 0)) &&
-                  (userData?.db_role === "applicant" || sessionUser?.role === "applicant") && (
+                  !completedTrainings.some((t: any) => t.annotate_project_id === 1 || t.annotate_sub_project_id === 1) && (
                     <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300 text-sm font-medium flex items-center gap-3">
                       <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 flex-shrink-0 text-amber-600 dark:text-amber-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <circle cx="12" cy="12" r="10" />
