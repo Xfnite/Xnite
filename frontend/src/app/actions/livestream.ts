@@ -233,3 +233,33 @@ export async function endLivestreamRoomAction(roomId: string) {
   }
 }
 
+/**
+ * Delete a check recording from the VOD Replay Library
+ */
+export async function deleteCheckRecordingAction(recordingId: string) {
+  try {
+    const user = await getSessionUser();
+    if (!user) {
+      return { success: false, error: "Unauthorized: Please log in." };
+    }
+
+    if (!isStaff(user.role)) {
+      return { success: false, error: "Forbidden: Only Checkers and Staff can delete recordings." };
+    }
+
+    if ((prisma as any).checkRecording) {
+      await (prisma as any).checkRecording.delete({
+        where: { id: recordingId },
+      });
+      return { success: true };
+    }
+
+    await pool.query('DELETE FROM "CheckRecording" WHERE "id" = $1', [recordingId]);
+    return { success: true };
+  } catch (error: any) {
+    console.error("[deleteCheckRecordingAction] Error:", error);
+    return { success: false, error: error.message || "Failed to delete check recording." };
+  }
+}
+
+

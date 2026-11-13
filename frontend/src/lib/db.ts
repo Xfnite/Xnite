@@ -10,7 +10,7 @@ const globalForPrisma = global as unknown as {
 };
 
 // Self-healing: if newly added models like checkRecording are missing from memory, invalidate the cached singleton
-if (globalForPrisma.prisma && !globalForPrisma.prisma.checkRecording) {
+if (globalForPrisma.prisma && !(globalForPrisma.prisma as any).checkRecording) {
   globalForPrisma.prisma = undefined;
 }
 

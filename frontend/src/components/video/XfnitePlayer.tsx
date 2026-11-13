@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { 
   Play, 
   Pause, 
@@ -10,8 +10,9 @@ import {
   Minimize, 
   Settings, 
   Check,
-  RotateCcw,
-  Sparkles
+  AlertTriangle,
+  RotateCw,
+  Loader2
 } from "lucide-react";
 
 interface XfnitePlayerProps {
@@ -35,38 +36,118 @@ export default function XfnitePlayer({ src, title, poster, autoPlay = false }: X
   const [selectedQuality, setSelectedQuality] = useState<string>("Auto (1080p)");
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
   const [showControls, setShowControls] = useState(true);
+  const [hasError, setHasError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const qualities = ["Auto (1080p)", "1080p (FHD)", "720p (HD)", "360p (Data Saver)"];
   const speeds = [0.75, 1, 1.25, 1.5, 2];
 
+  // Reload or retry loading the video
+  const handleRetry = useCallback(() => {
+    setHasError(false);
+    setErrorMessage("");
+    setIsLoading(true);
+    const video = videoRef.current;
+    if (video) {
+      video.load();
+      video.play().catch(() => {});
+    }
+  }, []);
+
+  // Listen to video element lifecycle events
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
+    setHasError(false);
+    setErrorMessage("");
+    setCurrentTime(0);
+    setDuration(0);
+    setIsLoading(true);
+    setIsPlaying(false);
+
     const handleTimeUpdate = () => setCurrentTime(video.currentTime);
-    const handleLoadedMetadata = () => setDuration(video.duration);
+    const handleLoadedMetadata = () => {
+      setDuration(video.duration);
+      setIsLoading(false);
+      setHasError(false);
+    };
+    const handleCanPlay = () => setIsLoading(false);
+    const handleWaiting = () => setIsLoading(true);
+    const handlePlaying = () => {
+      setIsPlaying(true);
+      setIsLoading(false);
+      setHasError(false);
+    };
+    const handlePlay = () => setIsPlaying(true);
+    const handlePause = () => setIsPlaying(false);
     const handleEnded = () => setIsPlaying(false);
+
+    const handleError = () => {
+      setIsLoading(false);
+      setIsPlaying(false);
+      setHasError(true);
+      const mediaErr = video.error;
+      if (mediaErr?.code === 4) {
+        setErrorMessage("Video recording not found or format unsupported (404).");
+      } else if (mediaErr?.code === 2) {
+        setErrorMessage("Network error while downloading the video stream.");
+      } else if (mediaErr?.code === 3) {
+        setErrorMessage("Video decoding error occurred.");
+      } else {
+        setErrorMessage("Unable to load video. Cloud storage or file may be unavailable.");
+      }
+    };
 
     video.addEventListener("timeupdate", handleTimeUpdate);
     video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    video.addEventListener("canplay", handleCanPlay);
+    video.addEventListener("waiting", handleWaiting);
+    video.addEventListener("playing", handlePlaying);
+    video.addEventListener("play", handlePlay);
+    video.addEventListener("pause", handlePause);
     video.addEventListener("ended", handleEnded);
+    video.addEventListener("error", handleError);
+
+    // Initial load
+    video.load();
+    if (autoPlay) {
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {
+          // If unmuted autoplay is blocked by browser policy, try muted
+          video.muted = true;
+          setIsMuted(true);
+          video.play().catch(() => {
+            setIsPlaying(false);
+          });
+        });
+      }
+    }
 
     return () => {
       video.removeEventListener("timeupdate", handleTimeUpdate);
       video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      video.removeEventListener("canplay", handleCanPlay);
+      video.removeEventListener("waiting", handleWaiting);
+      video.removeEventListener("playing", handlePlaying);
+      video.removeEventListener("play", handlePlay);
+      video.removeEventListener("pause", handlePause);
       video.removeEventListener("ended", handleEnded);
+      video.removeEventListener("error", handleError);
     };
-  }, []);
+  }, [src, autoPlay]);
 
   const togglePlay = () => {
     if (!videoRef.current) return;
     if (isPlaying) {
       videoRef.current.pause();
-      setIsPlaying(false);
     } else {
-      videoRef.current.play();
-      setIsPlaying(true);
+      videoRef.current.play().catch((err) => {
+        console.warn("[XfnitePlayer] Playback start prevented:", err?.message);
+      });
     }
   };
 
@@ -123,7 +204,7 @@ export default function XfnitePlayer({ src, title, poster, autoPlay = false }: X
   };
 
   const formatTime = (secs: number) => {
-    if (isNaN(secs)) return "00:00";
+    if (isNaN(secs) || secs < 0) return "00:00";
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
@@ -142,20 +223,56 @@ export default function XfnitePlayer({ src, title, poster, autoPlay = false }: X
       ref={containerRef}
       onMouseMove={handleMouseMove}
       onMouseLeave={() => isPlaying && setShowControls(false)}
-      className="relative aspect-video w-full bg-black rounded-2xl overflow-hidden shadow-2xl group select-none flex items-center justify-center"
+      className="relative aspect-video w-full bg-black rounded-2xl overflow-hidden shadow-2xl group select-none flex items-center justify-center border border-black/10 dark:border-white/10"
     >
       <video
         ref={videoRef}
         src={src}
         poster={poster}
-        autoPlay={autoPlay}
         onClick={togglePlay}
         playsInline
         className="w-full h-full object-contain cursor-pointer"
       />
 
-      {/* Big Center Play Button when paused */}
-      {!isPlaying && (
+      {/* Loading Spinner */}
+      {isLoading && !hasError && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-xs z-20 pointer-events-none gap-2">
+          <Loader2 className="w-10 h-10 animate-spin text-[#55f761]" />
+          <span className="text-white/80 text-xs font-medium">Loading video stream...</span>
+        </div>
+      )}
+
+      {/* Error Fallback Card Overlay */}
+      {hasError && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/85 backdrop-blur-md z-30 p-6 text-center space-y-3">
+          <div className="w-14 h-14 rounded-2xl bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-400">
+            <AlertTriangle className="w-7 h-7" />
+          </div>
+          <div className="space-y-1 max-w-md">
+            <h4 className="text-sm sm:text-base font-bold text-white">Video Recording Unavailable</h4>
+            <p className="text-xs text-white/70 leading-relaxed">
+              {errorMessage || "The video file could not be loaded or was not found on cloud storage."}
+            </p>
+            {src && (
+              <p className="text-[10px] text-white/40 font-mono truncate max-w-sm mx-auto pt-1">
+                Source: {src}
+              </p>
+            )}
+          </div>
+          <div className="flex items-center gap-2 pt-2">
+            <button
+              onClick={handleRetry}
+              className="px-4 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer border border-white/15"
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+              Retry Playback
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Big Center Play Button when paused and no error */}
+      {!isPlaying && !isLoading && !hasError && (
         <button
           onClick={togglePlay}
           className="absolute inset-0 m-auto w-16 h-16 rounded-full bg-emerald-500/90 dark:bg-[#55f761] text-white dark:text-[#060D14] flex items-center justify-center shadow-2xl hover:scale-110 active:scale-95 transition-all cursor-pointer z-20"
@@ -183,7 +300,7 @@ export default function XfnitePlayer({ src, title, poster, autoPlay = false }: X
       {/* Bottom Controls Bar */}
       <div
         className={`absolute bottom-0 inset-x-0 p-3 sm:p-4 bg-gradient-to-t from-black/95 via-black/70 to-transparent z-10 transition-opacity duration-300 flex flex-col gap-2 ${
-          showControls ? "opacity-100" : "opacity-0 pointer-events-none"
+          showControls && !hasError ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
       >
         {/* Scrubber Progress Bar */}
@@ -194,7 +311,8 @@ export default function XfnitePlayer({ src, title, poster, autoPlay = false }: X
             max={duration || 100}
             value={currentTime}
             onChange={handleSeek}
-            className="w-full h-1.5 bg-white/25 rounded-lg appearance-none cursor-pointer accent-[#55f761] hover:h-2.5 transition-all"
+            disabled={hasError || duration === 0}
+            className="w-full h-1.5 bg-white/25 rounded-lg appearance-none cursor-pointer accent-[#55f761] hover:h-2.5 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
           />
         </div>
 
@@ -203,7 +321,8 @@ export default function XfnitePlayer({ src, title, poster, autoPlay = false }: X
           <div className="flex items-center gap-3">
             <button
               onClick={togglePlay}
-              className="p-1 hover:text-emerald-400 transition-colors cursor-pointer"
+              disabled={hasError}
+              className="p-1 hover:text-emerald-400 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
             >
               {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
             </button>
@@ -315,4 +434,3 @@ export default function XfnitePlayer({ src, title, poster, autoPlay = false }: X
     </div>
   );
 }
-

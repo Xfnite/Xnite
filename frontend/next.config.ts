@@ -29,6 +29,14 @@ const nextConfig: NextConfig = {
       },
     ];
   },
+  async rewrites() {
+    return [
+      {
+        source: "/uploads/recordings/:filename*",
+        destination: "/api/livestream/recordings/:filename*",
+      },
+    ];
+  },
   turbopack: {
     root: path.resolve(import.meta.dirname || '.', '..'),
   },

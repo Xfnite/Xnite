@@ -5,7 +5,8 @@ import { getSessionUser } from "@/app/actions/auth";
 import { isStaff } from "@/config/permissions";
 import { 
   getCheckRecordingsAction, 
-  getActiveLivestreamRoomAction 
+  getActiveLivestreamRoomAction,
+  deleteCheckRecordingAction
 } from "@/app/actions/livestream";
 import XfnitePlayer from "@/components/video/XfnitePlayer";
 import { io, Socket } from "socket.io-client";
@@ -385,6 +386,27 @@ export default function LivestreamPage() {
       if (res.recordings.length > 0 && !selectedRecording) {
         setSelectedRecording(res.recordings[0]);
       }
+    }
+  };
+
+  const handleDeleteRecording = async (recordingId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm("Are you sure you want to delete this recorded check from the library?")) {
+      return;
+    }
+
+    const res = await deleteCheckRecordingAction(recordingId);
+    if (res.success) {
+      toast.success("Recording deleted from library.");
+      setRecordings((prev) => {
+        const updated = prev.filter((r) => r.id !== recordingId);
+        if (selectedRecording?.id === recordingId) {
+          setSelectedRecording(updated.length > 0 ? updated[0] : null);
+        }
+        return updated;
+      });
+    } else {
+      toast.error(res.error || "Failed to delete recording.");
     }
   };
 
@@ -980,9 +1002,20 @@ export default function LivestreamPage() {
                       Checked by {selectedRecording.checkerName} &bull; {new Date(selectedRecording.createdAt).toLocaleDateString()}
                     </p>
                   </div>
-                  <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-[#1F7A1F] dark:text-[#55f761] border border-emerald-500/20">
-                    {selectedRecording.projectType}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-[#1F7A1F] dark:text-[#55f761] border border-emerald-500/20">
+                      {selectedRecording.projectType}
+                    </span>
+                    {isUserStaff && (
+                      <button
+                        onClick={(e) => handleDeleteRecording(selectedRecording.id, e)}
+                        className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all cursor-pointer"
+                        title="Delete recording from library"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -1068,6 +1101,15 @@ export default function LivestreamPage() {
                       <span className="absolute top-2 left-2 px-2 py-0.5 rounded bg-emerald-500/80 text-[10px] text-white font-semibold">
                         {item.projectType}
                       </span>
+                      {isUserStaff && (
+                        <button
+                          onClick={(e) => handleDeleteRecording(item.id, e)}
+                          className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/60 hover:bg-red-600 text-white transition-all z-10 cursor-pointer"
+                          title="Delete recording"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
 
                     <div className="p-4 flex-1 flex flex-col justify-between">
