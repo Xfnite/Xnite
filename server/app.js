@@ -427,6 +427,14 @@ function broadcastLivestreamState(ioInstance) {
   ioInstance.emit("livestream:status_update", getPublicLivestreamState());
 }
 
+function broadcastLivestreamViewerCount(ioInstance) {
+  const roomSize = ioInstance.sockets.adapter.rooms.get("room:livestream")?.size || 0;
+  ioInstance.to("room:livestream").emit("livestream:viewer_count", roomSize);
+  if (activeLivestreamSession && activeLivestreamSession.checkerSocketId) {
+    ioInstance.to(activeLivestreamSession.checkerSocketId).emit("livestream:viewer_count", roomSize);
+  }
+}
+
 function advanceLivestreamQueue(ioInstance) {
   if (livestreamActiveReservation?.timer) {
     clearTimeout(livestreamActiveReservation.timer);
@@ -1688,6 +1696,7 @@ io.on("connection", (socket) => {
     };
     broadcastLivestreamState(io);
     socket.to("room:livestream").emit("livestream:stream_available");
+    broadcastLivestreamViewerCount(io);
   });
 
   socket.on("livestream:queue_join", () => {
@@ -1783,8 +1792,7 @@ io.on("connection", (socket) => {
 
   socket.on("livestream:join_room", () => {
     socket.join("room:livestream");
-    const roomSize = io.sockets.adapter.rooms.get("room:livestream")?.size || 0;
-    io.to("room:livestream").emit("livestream:viewer_count", roomSize);
+    broadcastLivestreamViewerCount(io);
     if (activeLivestreamSession && activeLivestreamSession.checkerSocketId) {
       io.to(activeLivestreamSession.checkerSocketId).emit("livestream:viewer_joined", {
         viewerSocketId: socket.id,
@@ -1796,8 +1804,7 @@ io.on("connection", (socket) => {
 
   socket.on("livestream:leave_room", () => {
     socket.leave("room:livestream");
-    const roomSize = io.sockets.adapter.rooms.get("room:livestream")?.size || 0;
-    io.to("room:livestream").emit("livestream:viewer_count", roomSize);
+    broadcastLivestreamViewerCount(io);
     if (activeLivestreamSession && activeLivestreamSession.checkerSocketId) {
       io.to(activeLivestreamSession.checkerSocketId).emit("livestream:viewer_left", {
         viewerSocketId: socket.id,
@@ -1834,6 +1841,13 @@ io.on("connection", (socket) => {
     ) {
       advanceLivestreamQueue(io);
     } else {
+      if (activeLivestreamSession && activeLivestreamSession.checkerSocketId) {
+        io.to(activeLivestreamSession.checkerSocketId).emit("livestream:viewer_left", {
+          viewerSocketId: socket.id,
+        });
+      }
+      broadcastLivestreamViewerCount(io);
+
       const beforeLen = livestreamBroadcastQueue.length;
       livestreamBroadcastQueue = livestreamBroadcastQueue.filter((item) => item.socketId !== socket.id);
       if (beforeLen !== livestreamBroadcastQueue.length) {

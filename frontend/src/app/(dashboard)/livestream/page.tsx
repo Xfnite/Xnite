@@ -318,7 +318,10 @@ export default function LivestreamPage() {
     });
 
     socket.on("livestream:viewer_count", (count: number) => {
-      setLiveViewerCount(count);
+      setLiveViewerCount(() => {
+        const activePeers = peerConnectionsRef.current.size;
+        return Math.max(count, activePeers);
+      });
     });
 
     socket.on("livestream:checker_busy", ({ message }: { message: string }) => {
@@ -340,6 +343,7 @@ export default function LivestreamPage() {
 
     // --- CHECKER SIDE: When a viewer joins the room, send WebRTC offer ---
     socket.on("livestream:viewer_joined", async ({ viewerSocketId }) => {
+      setLiveViewerCount((prev) => Math.max(prev + 1, peerConnectionsRef.current.size + 1));
       if (!mediaStreamRef.current) return;
 
       const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
@@ -393,6 +397,7 @@ export default function LivestreamPage() {
         peerConnectionsRef.current.delete(viewerSocketId);
       }
       pendingCandidatesRef.current.delete(viewerSocketId);
+      setLiveViewerCount(() => peerConnectionsRef.current.size);
     });
 
     // --- VIEWER & CHECKER: Handle incoming WebRTC signals ---
@@ -718,6 +723,7 @@ export default function LivestreamPage() {
     // Close all WebRTC peer connections
     peerConnectionsRef.current.forEach((pc) => pc.close());
     peerConnectionsRef.current.clear();
+    setLiveViewerCount(0);
 
     const recorder = mediaRecorderRef.current;
     const finalDuration = recordingSeconds;
@@ -812,6 +818,7 @@ export default function LivestreamPage() {
     if (socketRef.current) socketRef.current.emit("livestream:checker_stop");
     peerConnectionsRef.current.forEach((pc) => pc.close());
     peerConnectionsRef.current.clear();
+    setLiveViewerCount(0);
     screenStreamRef.current?.getTracks().forEach((t) => t.stop());
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
     mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -1114,32 +1121,6 @@ export default function LivestreamPage() {
                     </div>
                   )}
                 </div>
-
-                {/* Stream Sub-bar */}
-                <div className="p-4 bg-white/70 dark:bg-[#060D14]/70 backdrop-blur-md rounded-2xl border border-black/5 dark:border-white/10 flex items-center justify-between gap-4">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${liveSession ? "bg-red-500/10 text-red-500" : "bg-emerald-500/10 dark:bg-[#55f761]/10 text-[#1F7A1F] dark:text-[#55f761]"}`}>
-                      <Radio className={`w-5 h-5 ${liveSession ? "animate-ping" : "animate-pulse"}`} />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-semibold text-[#0D1B2A] dark:text-white">
-                        {liveSession ? liveSession.title : "Quality Audit Check Session"}
-                      </h3>
-                      <p className="text-xs text-secondary/70 dark:text-white/50">
-                        {liveSession
-                          ? `Host: ${liveSession.checkerName} • Live Stream (<0.3s Latency)`
-                          : "Hosted by Lead Checkers • Real-Time Inspection Hub"}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <span className="flex items-center gap-1.5 px-3 py-1 bg-black/5 dark:bg-white/5 rounded-full text-xs font-medium text-secondary dark:text-white/80">
-                      <Users className="w-3.5 h-3.5 text-[#1F7A1F] dark:text-[#55f761]" />
-                      <span>{liveViewerCount} / 10 in Lobby</span>
-                    </span>
-                  </div>
-                </div>
               </div>
           </div>
         )}
@@ -1316,8 +1297,9 @@ export default function LivestreamPage() {
                     <span className="font-mono text-base font-bold text-[#0D1B2A] dark:text-white">
                       {formatTimer(recordingSeconds)}
                     </span>
-                    <span className="px-2.5 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-xs font-medium text-[#2F3E46] dark:text-white/80">
-                      {liveViewerCount} Viewers Watching
+                    <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/5 dark:bg-white/10 text-xs font-medium text-[#2F3E46] dark:text-white/80">
+                      <Users className="w-3.5 h-3.5 text-[#1F7A1F] dark:text-[#55f761]" />
+                      <span>{liveViewerCount} {liveViewerCount === 1 ? "Viewer" : "Viewers"} Watching</span>
                     </span>
 
                     {/* Microphone Toggle */}
