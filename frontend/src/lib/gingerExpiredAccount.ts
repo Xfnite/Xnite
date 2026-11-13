@@ -15,15 +15,10 @@ export const EXEMPT_EXPIRED_EMAILS = new Set([
   "iru.xfnite@gmail.com",
 ]);
 
-export function isExemptFromGingerExpiration(email?: string | null, role?: string | null): boolean {
+export function isExemptFromGingerExpiration(email?: string | null, _role?: string | null): boolean {
   if (!email) return false;
   const cleanEmail = email.trim().toLowerCase();
-  if (EXEMPT_EXPIRED_EMAILS.has(cleanEmail)) return true;
-  const cleanRole = (role || "").trim().toLowerCase();
-  if (cleanRole === "admin" || cleanRole === "inner council" || cleanRole === "superadmin" || cleanRole === "checker" || cleanRole === "judger") {
-    return true;
-  }
-  return false;
+  return EXEMPT_EXPIRED_EMAILS.has(cleanEmail);
 }
 
 /**
