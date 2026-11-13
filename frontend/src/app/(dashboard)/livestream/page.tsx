@@ -563,7 +563,8 @@ export default function LivestreamPage() {
       mediaRecorderRef.current = null;
       if (livePreviewRef.current) livePreviewRef.current.srcObject = null;
 
-      const blob = new Blob(recordedChunksRef.current, { type: "video/webm" });
+      const mime = recorder.mimeType || "video/webm";
+      const blob = new Blob(recordedChunksRef.current, { type: mime });
       const url = URL.createObjectURL(blob);
       setRecordedBlob(blob);
       setRecordedBlobUrl(url);
@@ -1329,14 +1330,18 @@ export default function LivestreamPage() {
                     <span className="text-xs font-semibold text-[#2F3E46]/70 dark:text-white/50 block">
                       Playback Preview (Check your voice and screen)
                     </span>
-                    <div className="relative aspect-video w-full bg-black rounded-xl overflow-hidden border border-black/20 dark:border-white/20 shadow-inner flex items-center justify-center">
-                      <video
+                    {recordedBlobUrl ? (
+                      <XfnitePlayer
                         src={recordedBlobUrl}
-                        controls
-                        playsInline
-                        className="w-full h-full object-contain"
+                        title={sessionTitle || "Quality Audit Check Preview"}
+                        initialDuration={recordedDuration}
+                        autoPlay={false}
                       />
-                    </div>
+                    ) : (
+                      <div className="relative aspect-video w-full bg-black rounded-xl overflow-hidden border border-black/20 dark:border-white/20 shadow-inner flex items-center justify-center">
+                        <span className="text-white/40 text-xs">No recording loaded</span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Metadata Fields */}

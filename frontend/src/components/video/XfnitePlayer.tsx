@@ -20,9 +20,16 @@ interface XfnitePlayerProps {
   title?: string;
   poster?: string;
   autoPlay?: boolean;
+  initialDuration?: number;
 }
 
-export default function XfnitePlayer({ src, title, poster, autoPlay = false }: XfnitePlayerProps) {
+export default function XfnitePlayer({ 
+  src, 
+  title, 
+  poster, 
+  autoPlay = false,
+  initialDuration = 0
+}: XfnitePlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -64,13 +71,22 @@ export default function XfnitePlayer({ src, title, poster, autoPlay = false }: X
     setHasError(false);
     setErrorMessage("");
     setCurrentTime(0);
-    setDuration(0);
+    setDuration(initialDuration && initialDuration > 0 ? initialDuration : 0);
     setIsLoading(true);
     setIsPlaying(false);
 
     const handleTimeUpdate = () => setCurrentTime(video.currentTime);
     const handleLoadedMetadata = () => {
-      setDuration(video.duration);
+      if (isFinite(video.duration) && video.duration > 0) {
+        setDuration(video.duration);
+      } else if (initialDuration && initialDuration > 0) {
+        setDuration(initialDuration);
+      }
+      if (video.currentTime === 0) {
+        try {
+          video.currentTime = 0.001;
+        } catch {}
+      }
       setIsLoading(false);
       setHasError(false);
     };
@@ -204,7 +220,7 @@ export default function XfnitePlayer({ src, title, poster, autoPlay = false }: X
   };
 
   const formatTime = (secs: number) => {
-    if (isNaN(secs) || secs < 0) return "00:00";
+    if (isNaN(secs) || secs < 0 || !isFinite(secs)) return "00:00";
     const m = Math.floor(secs / 60);
     const s = Math.floor(secs % 60);
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
