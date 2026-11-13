@@ -9,6 +9,7 @@ import {
   deleteCheckRecordingAction
 } from "@/app/actions/livestream";
 import XfnitePlayer from "@/components/video/XfnitePlayer";
+import { ConfirmDeleteDialog } from "@/components/Attendance/ConfirmDeleteDialog";
 import { io, Socket } from "socket.io-client";
 import { 
   Radio, 
@@ -115,6 +116,10 @@ export default function LivestreamPage() {
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [recordedBlobUrl, setRecordedBlobUrl] = useState<string | null>(null);
   const [recordedDuration, setRecordedDuration] = useState<number>(0);
+
+  // Delete Recording Confirmation Modal State
+  const [recordingToDelete, setRecordingToDelete] = useState<string | null>(null);
+  const [isDeletingRecording, setIsDeletingRecording] = useState(false);
 
   // Live Screen Share & WebRTC state (Viewer & Checker)
   const [liveSession, setLiveSession] = useState<any>(null);
@@ -538,24 +543,33 @@ export default function LivestreamPage() {
     }
   };
 
-  const handleDeleteRecording = async (recordingId: string, e?: React.MouseEvent) => {
+  const openDeleteModal = (recordingId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (!window.confirm("Are you sure you want to delete this recorded check from the library?")) {
-      return;
-    }
+    setRecordingToDelete(recordingId);
+  };
 
-    const res = await deleteCheckRecordingAction(recordingId);
-    if (res.success) {
-      toast.success("Recording deleted from library.");
-      setRecordings((prev) => {
-        const updated = prev.filter((r) => r.id !== recordingId);
-        if (selectedRecording?.id === recordingId) {
-          setSelectedRecording(updated.length > 0 ? updated[0] : null);
-        }
-        return updated;
-      });
-    } else {
-      toast.error(res.error || "Failed to delete recording.");
+  const handleConfirmDelete = async () => {
+    if (!recordingToDelete) return;
+    setIsDeletingRecording(true);
+    try {
+      const res = await deleteCheckRecordingAction(recordingToDelete);
+      if (res.success) {
+        toast.success("Recording deleted from library.");
+        setRecordings((prev) => {
+          const updated = prev.filter((r) => r.id !== recordingToDelete);
+          if (selectedRecording?.id === recordingToDelete) {
+            setSelectedRecording(updated.length > 0 ? updated[0] : null);
+          }
+          return updated;
+        });
+        setRecordingToDelete(null);
+      } else {
+        toast.error(res.error || "Failed to delete recording.");
+      }
+    } catch {
+      toast.error("Failed to delete recording.");
+    } finally {
+      setIsDeletingRecording(false);
     }
   };
 
@@ -1151,7 +1165,7 @@ export default function LivestreamPage() {
                     </span>
                     {isUserStaff && (
                       <button
-                        onClick={(e) => handleDeleteRecording(selectedRecording.id, e)}
+                        onClick={(e) => openDeleteModal(selectedRecording.id, e)}
                         className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all cursor-pointer"
                         title="Delete recording from library"
                       >
@@ -1246,7 +1260,7 @@ export default function LivestreamPage() {
                       </span>
                       {isUserStaff && (
                         <button
-                          onClick={(e) => handleDeleteRecording(item.id, e)}
+                          onClick={(e) => openDeleteModal(item.id, e)}
                           className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/60 hover:bg-red-600 text-white transition-all z-10 cursor-pointer"
                           title="Delete recording"
                         >
@@ -1772,6 +1786,18 @@ export default function LivestreamPage() {
             )}
           </div>
         )}
+
+        {/* Delete Recording Confirmation Modal */}
+        <ConfirmDeleteDialog
+          isOpen={Boolean(recordingToDelete)}
+          onClose={() => {
+            if (!isDeletingRecording) setRecordingToDelete(null);
+          }}
+          onConfirm={handleConfirmDelete}
+          title="Delete Recorded Check"
+          description="Are you sure you want to delete this recorded check from the library? This action cannot be undone."
+          isDeleting={isDeletingRecording}
+        />
       </div>
     </div>
   );
