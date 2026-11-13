@@ -35,7 +35,8 @@ import {
   Trash2,
   Save,
   Check,
-  LogOut
+  LogOut,
+  AlertTriangle
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -123,6 +124,11 @@ export default function LivestreamPage() {
   const [isMicEnabled, setIsMicEnabled] = useState(true);
   const [hasJoinedStream, setHasJoinedStream] = useState(false);
   const [isConnectingStream, setIsConnectingStream] = useState(false);
+
+  // Concurrency guard: Only one checker can broadcast at a time
+  const isAnotherCheckerLive = Boolean(
+    liveSession && (!currentUser || liveSession.checkerEmail !== currentUser.email)
+  );
 
   // Refs for media stream & recording
   const livePreviewRef = useRef<HTMLVideoElement>(null);
@@ -252,6 +258,23 @@ export default function LivestreamPage() {
 
     socket.on("livestream:viewer_count", (count: number) => {
       setLiveViewerCount(count);
+    });
+
+    socket.on("livestream:checker_busy", ({ message }: { message: string }) => {
+      toast.error(message || "Another checker is currently live. Only one broadcast can be active at a time.");
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+        mediaStreamRef.current = null;
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+      }
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+      setIsCapturing(false);
+      setRecordingSeconds(0);
     });
 
     // --- CHECKER SIDE: When a viewer joins the room, send WebRTC offer ---
@@ -474,6 +497,11 @@ export default function LivestreamPage() {
   const startScreenCapture = async () => {
     if (!navigator.mediaDevices?.getDisplayMedia) {
       toast.error("Screen recording is not supported in this browser. Please use Chrome or Edge.");
+      return;
+    }
+
+    if (liveSession && (!currentUser || liveSession.checkerEmail !== currentUser.email)) {
+      toast.error(`Checker "${liveSession.checkerName}" is currently live. Only one broadcast can be active at a time.`);
       return;
     }
 
@@ -1543,12 +1571,26 @@ export default function LivestreamPage() {
                       </p>
                     </div>
 
+                    {isAnotherCheckerLive && (
+                      <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-700 dark:text-amber-400 flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        <span>
+                          <strong>{liveSession.checkerName}</strong> is currently live. Only one audit broadcast can be active at a time.
+                        </span>
+                      </div>
+                    )}
+
                     <button
                       onClick={startScreenCapture}
-                      className="w-full py-2.5 px-4 bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] rounded-xl text-xs font-bold shadow-md hover:scale-101 active:scale-99 transition-all cursor-pointer flex items-center justify-center gap-2"
+                      disabled={isAnotherCheckerLive}
+                      className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center gap-2 ${
+                        isAnotherCheckerLive
+                          ? "bg-black/10 dark:bg-white/10 text-black/40 dark:text-white/40 cursor-not-allowed"
+                          : "bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] hover:scale-101 active:scale-99 cursor-pointer"
+                      }`}
                     >
                       <ScreenShare className="w-4 h-4" />
-                      Start Screen Share / Live Check
+                      {isAnotherCheckerLive ? "Broadcast Busy (Checker Currently Live)" : "Start Screen Share / Live Check"}
                     </button>
                   </div>
 

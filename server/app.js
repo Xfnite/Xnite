@@ -1564,6 +1564,18 @@ io.on("connection", (socket) => {
 
   // --- Livestream & Real-Time Screen Share Signaling ---
   socket.on("livestream:checker_start", (data) => {
+    // Enforce single-stream broadcast: Only one checker can stream at a time
+    if (activeLivestreamSession && activeLivestreamSession.checkerSocketId !== socket.id) {
+      const currentCheckerSocket = io.sockets.sockets.get(activeLivestreamSession.checkerSocketId);
+      if (currentCheckerSocket && currentCheckerSocket.connected) {
+        socket.emit("livestream:checker_busy", {
+          message: `Checker "${activeLivestreamSession.checkerName}" is currently live. Only one audit broadcast can be active at a time.`,
+          session: activeLivestreamSession,
+        });
+        return;
+      }
+    }
+
     activeLivestreamSession = {
       checkerSocketId: socket.id,
       checkerEmail: socket.user?.email || "checker",
