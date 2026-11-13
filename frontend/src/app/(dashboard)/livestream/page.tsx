@@ -16,7 +16,6 @@ import {
   Upload, 
   Users, 
   Play, 
-  CheckCircle2, 
   ScreenShare, 
   Film, 
   Sparkles,
@@ -965,10 +964,9 @@ export default function LivestreamPage() {
 
         {/* Tab 1: Live Stream Player */}
         {activeTab === "live" && (
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Main Live Player Column */}
-              <div className="lg:col-span-2 space-y-4">
+          <div className="space-y-4 max-w-5xl mx-auto">
+            {/* Main Live Player Column */}
+            <div className="space-y-4">
                 <div className="relative aspect-video w-full bg-black rounded-2xl overflow-hidden shadow-2xl border border-black/10 dark:border-white/10 group flex items-center justify-center">
                   {/* Mode A: Real-Time WebRTC In-Browser Stream when a Checker is LIVE */}
                   {liveSession ? (
@@ -1143,60 +1141,6 @@ export default function LivestreamPage() {
                   </div>
                 </div>
               </div>
-
-              {/* Live Info Sidebar */}
-              <div className="space-y-4">
-                <div className="p-5 bg-white/70 dark:bg-[#060D14]/70 backdrop-blur-md rounded-2xl border border-black/5 dark:border-white/10 space-y-4">
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-[#1F7A1F] dark:text-[#55f761]" />
-                    <h3 className="text-sm font-semibold text-[#0D1B2A] dark:text-white">
-                      Live Stream Info
-                    </h3>
-                  </div>
-
-                  <div className="space-y-2.5 text-xs text-secondary/80 dark:text-white/70 leading-relaxed">
-                    <div className="flex items-center justify-between py-1.5 border-b border-black/5 dark:border-white/5">
-                      <span>Stream Mode</span>
-                      <span className="font-semibold text-[#0D1B2A] dark:text-white">
-                        WebRTC Real-Time
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between py-1.5 border-b border-black/5 dark:border-white/5">
-                      <span>Latency</span>
-                      <span className="font-semibold text-emerald-600 dark:text-[#55f761]">
-                        &lt; 0.3s (Ultra-Low)
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between py-1.5 border-b border-black/5 dark:border-white/5">
-                      <span>Resolution</span>
-                      <span className="font-semibold text-[#0D1B2A] dark:text-white">1080p @ 30 FPS</span>
-                    </div>
-                    <div className="flex items-center justify-between py-1.5 border-b border-black/5 dark:border-white/5">
-                      <span>Audio</span>
-                      <span className="font-semibold text-[#0D1B2A] dark:text-white">Mic &amp; System Audio</span>
-                    </div>
-                    <div className="flex items-center justify-between py-1.5 border-b border-black/5 dark:border-white/5">
-                      <span>Lobby Capacity</span>
-                      <span className="font-semibold text-[#0D1B2A] dark:text-white">10 Active Viewers</span>
-                    </div>
-                    <div className="flex items-center justify-between py-1.5">
-                      <span>VOD Availability</span>
-                      <span className="font-semibold text-emerald-600 dark:text-[#55f761]">Instant Replay</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-4 bg-emerald-500/5 dark:bg-[#55f761]/5 border border-emerald-500/15 rounded-2xl text-xs text-[#1F7A1F] dark:text-[#55f761]/90 leading-relaxed space-y-1">
-                  <span className="font-bold flex items-center gap-1.5">
-                    <CheckCircle2 className="w-4 h-4" />
-                    How to Learn from Streams
-                  </span>
-                  <p>
-                    Checkers provide direct verbal feedback and demonstrate correction guidelines. Note down timestamps or re-watch key sections in the Replay Library.
-                  </p>
-                </div>
-              </div>
-            </div>
           </div>
         )}
 
