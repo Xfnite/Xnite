@@ -398,6 +398,79 @@ const jukeboxLastAddedTimes = new Map();
 const activeConnections = new Map(); // tracks unique users by email
 const activeChatWidgetConnections = new Map(); // tracks unique users by email with chat open
 let activeLivestreamSession = null; // tracks active live check session for real-time screen sharing
+let livestreamBroadcastQueue = []; // [{ socketId, email, name, role, queuedAt }]
+let livestreamActiveReservation = null; // { socketId, email, name, role, expiresAt, timer }
+
+function getPublicLivestreamState() {
+  return {
+    isLive: !!activeLivestreamSession,
+    session: activeLivestreamSession,
+    queue: livestreamBroadcastQueue.map((item, idx) => ({
+      position: idx + 1,
+      email: item.email,
+      name: item.name,
+      role: item.role,
+      queuedAt: item.queuedAt,
+    })),
+    reservedChecker: livestreamActiveReservation
+      ? {
+          email: livestreamActiveReservation.email,
+          name: livestreamActiveReservation.name,
+          role: livestreamActiveReservation.role,
+          expiresAt: livestreamActiveReservation.expiresAt,
+        }
+      : null,
+  };
+}
+
+function broadcastLivestreamState(ioInstance) {
+  ioInstance.emit("livestream:status_update", getPublicLivestreamState());
+}
+
+function advanceLivestreamQueue(ioInstance) {
+  if (livestreamActiveReservation?.timer) {
+    clearTimeout(livestreamActiveReservation.timer);
+    livestreamActiveReservation = null;
+  }
+
+  // Remove disconnected sockets from the queue
+  livestreamBroadcastQueue = livestreamBroadcastQueue.filter((item) => {
+    const s = ioInstance.sockets.sockets.get(item.socketId);
+    return s && s.connected;
+  });
+
+  if (livestreamBroadcastQueue.length > 0) {
+    const nextChecker = livestreamBroadcastQueue.shift();
+    const RESERVATION_WINDOW_MS = 60 * 1000; // 60 seconds reservation to start screen share
+    const expiresAt = Date.now() + RESERVATION_WINDOW_MS;
+
+    const timer = setTimeout(() => {
+      console.log(`[livestream] Reservation expired for ${nextChecker.email}`);
+      if (livestreamActiveReservation && livestreamActiveReservation.email === nextChecker.email) {
+        livestreamActiveReservation = null;
+        advanceLivestreamQueue(ioInstance);
+      }
+    }, RESERVATION_WINDOW_MS);
+
+    livestreamActiveReservation = {
+      socketId: nextChecker.socketId,
+      email: nextChecker.email,
+      name: nextChecker.name,
+      role: nextChecker.role,
+      expiresAt,
+      timer,
+    };
+
+    ioInstance.to(nextChecker.socketId).emit("livestream:your_turn", {
+      expiresAt,
+      message: "It's your turn to broadcast! You have 60 seconds to start your live check.",
+    });
+  } else {
+    livestreamActiveReservation = null;
+  }
+
+  broadcastLivestreamState(ioInstance);
+}
 
 function getFakeCount(realCount, type) {
   if (realCount === 0) return 0;
@@ -1564,7 +1637,7 @@ io.on("connection", (socket) => {
 
   // --- Livestream & Real-Time Screen Share Signaling ---
   socket.on("livestream:checker_start", (data) => {
-    // Enforce single-stream broadcast: Only one checker can stream at a time
+    // 1. Enforce single-stream broadcast: Only one checker can stream at a time
     if (activeLivestreamSession && activeLivestreamSession.checkerSocketId !== socket.id) {
       const currentCheckerSocket = io.sockets.sockets.get(activeLivestreamSession.checkerSocketId);
       if (currentCheckerSocket && currentCheckerSocket.connected) {
@@ -1576,6 +1649,35 @@ io.on("connection", (socket) => {
       }
     }
 
+    // 2. Enforce queue reservation: If slot is reserved for someone else
+    if (
+      livestreamActiveReservation &&
+      Date.now() < livestreamActiveReservation.expiresAt &&
+      livestreamActiveReservation.email !== (socket.user?.email || "") &&
+      livestreamActiveReservation.socketId !== socket.id
+    ) {
+      socket.emit("livestream:checker_busy", {
+        message: `Broadcast slot is currently reserved for ${livestreamActiveReservation.name} (next in queue).`,
+        session: activeLivestreamSession,
+        reservedChecker: livestreamActiveReservation,
+      });
+      return;
+    }
+
+    // Clear active reservation if it belonged to this checker
+    if (
+      livestreamActiveReservation &&
+      (livestreamActiveReservation.email === (socket.user?.email || "") || livestreamActiveReservation.socketId === socket.id)
+    ) {
+      if (livestreamActiveReservation.timer) clearTimeout(livestreamActiveReservation.timer);
+      livestreamActiveReservation = null;
+    }
+
+    // Remove user from broadcast queue if they were queued
+    livestreamBroadcastQueue = livestreamBroadcastQueue.filter(
+      (item) => item.socketId !== socket.id && (!socket.user?.email || item.email !== socket.user.email)
+    );
+
     activeLivestreamSession = {
       checkerSocketId: socket.id,
       checkerEmail: socket.user?.email || "checker",
@@ -1584,12 +1686,99 @@ io.on("connection", (socket) => {
       projectType: data?.projectType || "Standard Building",
       startedAt: new Date(),
     };
-    io.emit("livestream:status_update", { isLive: true, session: activeLivestreamSession });
+    broadcastLivestreamState(io);
     socket.to("room:livestream").emit("livestream:stream_available");
   });
 
+  socket.on("livestream:queue_join", () => {
+    const userEmail = socket.user?.email;
+    const userName = socket.user?.name || "Checker";
+    const userRole = socket.user?.role || "checker";
+
+    if (!userEmail) {
+      socket.emit("livestream:queue_error", { message: "Authentication required to join broadcast queue." });
+      return;
+    }
+
+    // If user is already the active broadcaster
+    if (activeLivestreamSession && (activeLivestreamSession.checkerEmail === userEmail || activeLivestreamSession.checkerSocketId === socket.id)) {
+      socket.emit("livestream:queue_error", { message: "You are already the active broadcaster." });
+      return;
+    }
+
+    // If user already has the active reservation, remind them it's their turn
+    if (
+      livestreamActiveReservation &&
+      (livestreamActiveReservation.email === userEmail || livestreamActiveReservation.socketId === socket.id) &&
+      Date.now() < livestreamActiveReservation.expiresAt
+    ) {
+      socket.emit("livestream:your_turn", {
+        expiresAt: livestreamActiveReservation.expiresAt,
+        message: "It's your turn to broadcast! You have reserved broadcast access.",
+      });
+      return;
+    }
+
+    // Check if already in queue
+    const existingIdx = livestreamBroadcastQueue.findIndex((item) => item.email === userEmail);
+    if (existingIdx !== -1) {
+      livestreamBroadcastQueue[existingIdx].socketId = socket.id;
+      broadcastLivestreamState(io);
+      socket.emit("livestream:queue_joined", { position: existingIdx + 1 });
+      return;
+    }
+
+    // If no one is live and no reservation exists, give immediate reservation
+    if (!activeLivestreamSession && !livestreamActiveReservation) {
+      livestreamBroadcastQueue.push({
+        socketId: socket.id,
+        email: userEmail,
+        name: userName,
+        role: userRole,
+        queuedAt: new Date(),
+      });
+      advanceLivestreamQueue(io);
+      return;
+    }
+
+    livestreamBroadcastQueue.push({
+      socketId: socket.id,
+      email: userEmail,
+      name: userName,
+      role: userRole,
+      queuedAt: new Date(),
+    });
+
+    broadcastLivestreamState(io);
+    socket.emit("livestream:queue_joined", { position: livestreamBroadcastQueue.length });
+  });
+
+  socket.on("livestream:queue_leave", () => {
+    const userEmail = socket.user?.email;
+
+    // If user was the reserved checker, forfeit and advance queue
+    if (
+      livestreamActiveReservation &&
+      (livestreamActiveReservation.email === userEmail || livestreamActiveReservation.socketId === socket.id)
+    ) {
+      advanceLivestreamQueue(io);
+      socket.emit("livestream:queue_left");
+      return;
+    }
+
+    const beforeLen = livestreamBroadcastQueue.length;
+    livestreamBroadcastQueue = livestreamBroadcastQueue.filter(
+      (item) => item.socketId !== socket.id && (!userEmail || item.email !== userEmail)
+    );
+
+    if (beforeLen !== livestreamBroadcastQueue.length) {
+      broadcastLivestreamState(io);
+    }
+    socket.emit("livestream:queue_left");
+  });
+
   socket.on("livestream:get_status", () => {
-    socket.emit("livestream:status_update", { isLive: !!activeLivestreamSession, session: activeLivestreamSession });
+    socket.emit("livestream:status_update", getPublicLivestreamState());
   });
 
   socket.on("livestream:join_room", () => {
@@ -1624,16 +1813,32 @@ io.on("connection", (socket) => {
   });
 
   socket.on("livestream:checker_stop", () => {
-    activeLivestreamSession = null;
-    io.emit("livestream:status_update", { isLive: false, session: null });
-    io.to("room:livestream").emit("livestream:ended");
+    if (activeLivestreamSession && activeLivestreamSession.checkerSocketId === socket.id) {
+      activeLivestreamSession = null;
+      io.to("room:livestream").emit("livestream:ended");
+      advanceLivestreamQueue(io);
+    } else {
+      activeLivestreamSession = null;
+      broadcastLivestreamState(io);
+    }
   });
 
   socket.on("disconnect", () => {
     if (activeLivestreamSession && activeLivestreamSession.checkerSocketId === socket.id) {
       activeLivestreamSession = null;
-      io.emit("livestream:status_update", { isLive: false, session: null });
       io.to("room:livestream").emit("livestream:ended");
+      advanceLivestreamQueue(io);
+    } else if (
+      livestreamActiveReservation &&
+      livestreamActiveReservation.socketId === socket.id
+    ) {
+      advanceLivestreamQueue(io);
+    } else {
+      const beforeLen = livestreamBroadcastQueue.length;
+      livestreamBroadcastQueue = livestreamBroadcastQueue.filter((item) => item.socketId !== socket.id);
+      if (beforeLen !== livestreamBroadcastQueue.length) {
+        broadcastLivestreamState(io);
+      }
     }
 
     if (socket.user.email) {

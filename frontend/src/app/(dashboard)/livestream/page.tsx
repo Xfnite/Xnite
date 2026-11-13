@@ -125,10 +125,33 @@ export default function LivestreamPage() {
   const [hasJoinedStream, setHasJoinedStream] = useState(false);
   const [isConnectingStream, setIsConnectingStream] = useState(false);
 
-  // Concurrency guard: Only one checker can broadcast at a time
+  // Livestream Queue & Reservation State
+  const [broadcastQueue, setBroadcastQueue] = useState<
+    Array<{ position: number; email: string; name: string; role?: string; queuedAt?: string }>
+  >([]);
+  const [reservedChecker, setReservedChecker] = useState<{
+    email: string;
+    name: string;
+    role?: string;
+    expiresAt: number;
+  } | null>(null);
+  const [isQueueActionLoading, setIsQueueActionLoading] = useState(false);
+
+  // Concurrency & Queue Guards
   const isAnotherCheckerLive = Boolean(
-    liveSession && (!currentUser || liveSession.checkerEmail !== currentUser.email)
+    liveSession && (!currentUser || liveSession.checkerEmail?.toLowerCase() !== currentUser.email?.toLowerCase())
   );
+  const isMyTurn = Boolean(
+    reservedChecker && currentUser && reservedChecker.email?.toLowerCase() === currentUser.email?.toLowerCase()
+  );
+  const isAnotherCheckerReserved = Boolean(
+    reservedChecker && (!currentUser || reservedChecker.email?.toLowerCase() !== currentUser.email?.toLowerCase())
+  );
+  const myQueueItem = broadcastQueue.find(
+    (item) => currentUser && item.email?.toLowerCase() === currentUser.email?.toLowerCase()
+  );
+  const isQueued = Boolean(myQueueItem);
+  const myQueuePosition = myQueueItem?.position || 0;
 
   // Refs for media stream & recording
   const livePreviewRef = useRef<HTMLVideoElement>(null);
@@ -215,6 +238,20 @@ export default function LivestreamPage() {
     toast.info("Left live stream.");
   };
 
+  // Checker joins broadcast queue when another checker is broadcasting
+  const handleJoinQueue = () => {
+    if (!socketRef.current) return;
+    setIsQueueActionLoading(true);
+    socketRef.current.emit("livestream:queue_join");
+  };
+
+  // Checker leaves broadcast queue
+  const handleLeaveQueue = () => {
+    if (!socketRef.current) return;
+    setIsQueueActionLoading(true);
+    socketRef.current.emit("livestream:queue_leave");
+  };
+
   // Automatically disconnect from live stream if viewer switches away from "live" tab
   useEffect(() => {
     if (activeTab !== "live" && hasJoinedStream) {
@@ -244,7 +281,7 @@ export default function LivestreamPage() {
       toast.info("A checker has started a live audit inspection! Click 'Watch Live Stream' to view.");
     });
 
-    socket.on("livestream:status_update", ({ isLive, session }) => {
+    socket.on("livestream:status_update", ({ isLive, session, queue, reservedChecker: reserved }: any) => {
       if (isLive && session) {
         setLiveSession(session);
       } else {
@@ -254,6 +291,31 @@ export default function LivestreamPage() {
         setHasJoinedStream(false);
         setIsConnectingStream(false);
       }
+      if (Array.isArray(queue)) {
+        setBroadcastQueue(queue);
+      }
+      setReservedChecker(reserved || null);
+    });
+
+    socket.on("livestream:your_turn", ({ message }: { expiresAt: number; message?: string }) => {
+      toast.success(message || "🎉 It's your turn to broadcast! You now have reserved broadcast access.", {
+        duration: 12000,
+      });
+    });
+
+    socket.on("livestream:queue_joined", ({ position }: { position: number }) => {
+      setIsQueueActionLoading(false);
+      toast.success(`Joined queue! You are #${position} in line to broadcast.`);
+    });
+
+    socket.on("livestream:queue_left", () => {
+      setIsQueueActionLoading(false);
+      toast.info("You left the broadcast queue.");
+    });
+
+    socket.on("livestream:queue_error", ({ message }: { message: string }) => {
+      setIsQueueActionLoading(false);
+      toast.error(message || "Queue action failed.");
     });
 
     socket.on("livestream:viewer_count", (count: number) => {
@@ -500,8 +562,13 @@ export default function LivestreamPage() {
       return;
     }
 
-    if (liveSession && (!currentUser || liveSession.checkerEmail !== currentUser.email)) {
-      toast.error(`Checker "${liveSession.checkerName}" is currently live. Only one broadcast can be active at a time.`);
+    if (liveSession && (!currentUser || liveSession.checkerEmail?.toLowerCase() !== currentUser.email?.toLowerCase())) {
+      toast.error(`Checker "${liveSession.checkerName}" is currently live. You can join the broadcast queue to be next!`);
+      return;
+    }
+
+    if (isAnotherCheckerReserved && reservedChecker) {
+      toast.error(`Broadcast slot is currently reserved for ${reservedChecker.name}. You can join the queue behind them.`);
       return;
     }
 
@@ -1571,27 +1638,144 @@ export default function LivestreamPage() {
                       </p>
                     </div>
 
-                    {isAnotherCheckerLive && (
-                      <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-700 dark:text-amber-400 flex items-center gap-2">
-                        <AlertTriangle className="w-4 h-4 shrink-0" />
-                        <span>
-                          <strong>{liveSession.checkerName}</strong> is currently live. Only one audit broadcast can be active at a time.
-                        </span>
+                    {/* State A: It's My Turn */}
+                    {isMyTurn && (
+                      <div className="p-3.5 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-xs text-emerald-800 dark:text-emerald-300 flex items-center justify-between gap-3 animate-pulse">
+                        <div className="flex items-center gap-2">
+                          <Sparkles className="w-4 h-4 shrink-0 text-emerald-600 dark:text-[#55f761]" />
+                          <span>
+                            <strong>It&apos;s your turn to broadcast!</strong> You have reserved access. Click below to start.
+                          </span>
+                        </div>
+                        <button
+                          onClick={handleLeaveQueue}
+                          disabled={isQueueActionLoading}
+                          className="text-[11px] underline text-emerald-700 dark:text-emerald-400 hover:opacity-80 shrink-0 cursor-pointer"
+                        >
+                          Forfeit Turn
+                        </button>
                       </div>
                     )}
 
-                    <button
-                      onClick={startScreenCapture}
-                      disabled={isAnotherCheckerLive}
-                      className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center gap-2 ${
-                        isAnotherCheckerLive
-                          ? "bg-black/10 dark:bg-white/10 text-black/40 dark:text-white/40 cursor-not-allowed"
-                          : "bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] hover:scale-101 active:scale-99 cursor-pointer"
-                      }`}
-                    >
-                      <ScreenShare className="w-4 h-4" />
-                      {isAnotherCheckerLive ? "Broadcast Busy (Checker Currently Live)" : "Start Screen Share / Live Check"}
-                    </button>
+                    {/* State B: Another Checker Live - Not in Queue */}
+                    {isAnotherCheckerLive && !isQueued && !isMyTurn && (
+                      <div className="space-y-3">
+                        <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-700 dark:text-amber-400 flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4 shrink-0" />
+                          <span>
+                            <strong>{liveSession.checkerName}</strong> is currently live. Only one audit broadcast can be active at a time.
+                          </span>
+                        </div>
+                        <button
+                          onClick={handleJoinQueue}
+                          disabled={isQueueActionLoading}
+                          className="w-full py-2.5 px-4 bg-amber-500 hover:bg-amber-600 active:scale-99 text-white rounded-xl text-xs font-bold shadow-md hover:scale-101 transition-all cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <Clock className="w-4 h-4" />
+                          {isQueueActionLoading
+                            ? "Joining Queue..."
+                            : `Join Broadcast Queue${broadcastQueue.length > 0 ? ` (${broadcastQueue.length} waiting)` : ""}`}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* State C: Currently Queued */}
+                    {isQueued && !isMyTurn && (
+                      <div className="space-y-3">
+                        <div className="p-3.5 bg-blue-500/10 border border-blue-500/20 rounded-xl text-xs text-blue-700 dark:text-blue-300 flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <Clock className="w-4 h-4 shrink-0 text-blue-500" />
+                            <span>
+                              You are <strong>#{myQueuePosition}</strong> of {broadcastQueue.length} in queue. Your turn begins when the current check finishes.
+                            </span>
+                          </div>
+                          <button
+                            onClick={handleLeaveQueue}
+                            disabled={isQueueActionLoading}
+                            className="px-2.5 py-1 bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400 rounded-lg text-[11px] font-semibold transition-all shrink-0 cursor-pointer"
+                          >
+                            Leave Queue
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* State D: Slot Reserved for Another Checker */}
+                    {!liveSession && isAnotherCheckerReserved && !isMyTurn && !isQueued && (
+                      <div className="space-y-3">
+                        <div className="p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-xs text-purple-700 dark:text-purple-300 flex items-center gap-2">
+                          <Clock className="w-4 h-4 shrink-0 text-purple-500" />
+                          <span>
+                            Broadcast slot is currently reserved for <strong>{reservedChecker?.name}</strong> (next in queue).
+                          </span>
+                        </div>
+                        <button
+                          onClick={handleJoinQueue}
+                          disabled={isQueueActionLoading}
+                          className="w-full py-2.5 px-4 bg-purple-600 hover:bg-purple-700 active:scale-99 text-white rounded-xl text-xs font-bold shadow-md hover:scale-101 transition-all cursor-pointer flex items-center justify-center gap-2"
+                        >
+                          <Clock className="w-4 h-4" />
+                          {isQueueActionLoading ? "Joining..." : `Queue Behind ${reservedChecker?.name}`}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Start Broadcast Button (Available when no one is live/reserved or when it's user's turn) */}
+                    {((!isAnotherCheckerLive && !isAnotherCheckerReserved) || isMyTurn) && (
+                      <button
+                        onClick={startScreenCapture}
+                        className={`w-full py-2.5 px-4 bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] rounded-xl text-xs font-bold shadow-md hover:scale-101 active:scale-99 transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                          isMyTurn ? "ring-2 ring-emerald-500 ring-offset-2 animate-bounce shadow-lg" : ""
+                        }`}
+                      >
+                        <ScreenShare className="w-4 h-4" />
+                        {isMyTurn ? "Your Turn: Start Screen Share / Live Check" : "Start Screen Share / Live Check"}
+                      </button>
+                    )}
+
+                    {/* Broadcast Queue List */}
+                    {broadcastQueue.length > 0 && (
+                      <div className="mt-2 pt-3 border-t border-black/5 dark:border-white/5 space-y-2">
+                        <div className="flex items-center justify-between text-xs font-semibold text-[#0D1B2A] dark:text-white">
+                          <span className="flex items-center gap-1.5 text-black/70 dark:text-white/70">
+                            <Users className="w-3.5 h-3.5 text-[#1F7A1F] dark:text-[#55f761]" />
+                            Broadcast Queue ({broadcastQueue.length})
+                          </span>
+                          {isQueued && (
+                            <span className="text-[11px] font-medium text-emerald-600 dark:text-[#55f761]">
+                              You are #{myQueuePosition}
+                            </span>
+                          )}
+                        </div>
+                        <div className="space-y-1.5 max-h-28 overflow-y-auto pr-1">
+                          {broadcastQueue.map((item, idx) => {
+                            const isMe = currentUser?.email?.toLowerCase() === item.email?.toLowerCase();
+                            return (
+                              <div
+                                key={item.email + idx}
+                                className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs transition-colors ${
+                                  isMe
+                                    ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-900 dark:text-emerald-300 font-semibold"
+                                    : "bg-black/5 dark:bg-white/5 text-[#2F3E46] dark:text-white/80"
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 truncate">
+                                  <span className="w-4 h-4 rounded-full bg-black/10 dark:bg-white/10 flex items-center justify-center text-[10px] font-bold shrink-0">
+                                    {idx + 1}
+                                  </span>
+                                  <span className="truncate">
+                                    {item.name} {isMe ? "(You)" : ""}
+                                  </span>
+                                </div>
+                                <span className="text-[10px] text-black/40 dark:text-white/40 uppercase shrink-0">
+                                  {item.role || "Checker"}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* Method 2: Drag and Drop Video Upload */}
