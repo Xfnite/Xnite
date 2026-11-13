@@ -119,7 +119,6 @@ export default function LivestreamPage() {
   // Live Screen Share & WebRTC state (Viewer & Checker)
   const [liveSession, setLiveSession] = useState<any>(null);
   const [liveViewerCount, setLiveViewerCount] = useState<number>(0);
-  const [useOwncastFeed, setUseOwncastFeed] = useState(false);
   const [isViewerMuted, setIsViewerMuted] = useState(true);
   const [isMicEnabled, setIsMicEnabled] = useState(true);
   const [hasJoinedStream, setHasJoinedStream] = useState(false);
@@ -268,7 +267,18 @@ export default function LivestreamPage() {
       };
 
       mediaStreamRef.current.getTracks().forEach((track) => {
-        pc.addTrack(track, mediaStreamRef.current!);
+        const sender = pc.addTrack(track, mediaStreamRef.current!);
+        if (track.kind === "video" && sender) {
+          try {
+            const params = sender.getParameters();
+            if (!params.encodings || params.encodings.length === 0) {
+              params.encodings = [{}];
+            }
+            params.encodings[0].maxBitrate = 2_500_000; // 2.5 Mbps cap prevents bandwidth lag
+            params.degradationPreference = "maintain-framerate";
+            sender.setParameters(params).catch(() => {});
+          } catch {}
+        }
       });
 
       pc.onicecandidate = (event) => {
@@ -485,12 +495,23 @@ export default function LivestreamPage() {
         toast.info("Microphone not detected; streaming screen without mic audio.");
       }
 
-      // 2. Capture screen (with tab/system audio if user enables it)
+      // 2. Capture screen (capped at 1080p @ 30fps to eliminate lag from 2K/4K/144Hz displays)
       const screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: "monitor" },
+        video: {
+          displaySurface: "monitor",
+          width: { max: 1920 },
+          height: { max: 1080 },
+          frameRate: { ideal: 30, max: 30 },
+        },
         audio: true,
       });
       screenStreamRef.current = screenStream;
+
+      // Optimize encoding for sharp screen detail
+      const screenTrack = screenStream.getVideoTracks()[0];
+      if (screenTrack && "contentHint" in screenTrack) {
+        screenTrack.contentHint = "detail";
+      }
 
       // 3. Mix microphone + screen audio into combined stream
       let finalAudioTracks: MediaStreamTrack[] = [];
@@ -499,7 +520,10 @@ export default function LivestreamPage() {
 
       if (hasSysAudio && hasMicAudio) {
         try {
-          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({
+            sampleRate: 48000,
+            latencyHint: "interactive",
+          });
           audioContextRef.current = audioCtx;
           const dest = audioCtx.createMediaStreamDestination();
           const sysSource = audioCtx.createMediaStreamSource(screenStream);
@@ -530,13 +554,20 @@ export default function LivestreamPage() {
         livePreviewRef.current.play().catch(() => {});
       }
 
-      // Initialize MediaRecorder for local recording
-      let mimeType = "video/webm;codecs=vp9,opus";
+      // Initialize MediaRecorder: Prefer hardware-accelerated VP8 with 2.5 Mbps cap for smooth performance
+      let mimeType = "video/webm;codecs=vp8,opus";
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = "video/webm;codecs=vp9,opus";
+      }
       if (!MediaRecorder.isTypeSupported(mimeType)) {
         mimeType = "video/webm";
       }
 
-      const recorder = new MediaRecorder(combinedStream, { mimeType });
+      const recorder = new MediaRecorder(combinedStream, {
+        mimeType,
+        videoBitsPerSecond: 2_500_000,
+        audioBitsPerSecond: 128_000,
+      });
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
           recordedChunksRef.current.push(event.data);
@@ -713,7 +744,7 @@ export default function LivestreamPage() {
     }
 
     setIsUploading(true);
-    toast.info("Uploading video check to Cloudflare R2...");
+    toast.info("Uploading video check to Replay Library...");
 
     try {
       const formData = new FormData();
@@ -845,7 +876,7 @@ export default function LivestreamPage() {
               <div className="lg:col-span-2 space-y-4">
                 <div className="relative aspect-video w-full bg-black rounded-2xl overflow-hidden shadow-2xl border border-black/10 dark:border-white/10 group flex items-center justify-center">
                   {/* Mode A: Real-Time WebRTC In-Browser Stream when a Checker is LIVE */}
-                  {liveSession && !useOwncastFeed ? (
+                  {liveSession ? (
                     hasJoinedStream ? (
                       <div className="relative w-full h-full bg-black flex items-center justify-center">
                         <video
@@ -966,15 +997,6 @@ export default function LivestreamPage() {
                         </p>
                       </div>
                     )
-                  ) : useOwncastFeed ? (
-                    /* Mode B: Owncast HLS Iframe Feed */
-                    <iframe
-                      src="https://stream.xfnite.cloud/embed/video"
-                      title="Xfnite Live Stream"
-                      className="w-full h-full border-0"
-                      allow="autoplay; fullscreen; picture-in-picture"
-                      allowFullScreen
-                    />
                   ) : (
                     /* Standby / Offline Screen when no one is live */
                     <div className="text-center p-8 space-y-4 max-w-md">
@@ -987,18 +1009,13 @@ export default function LivestreamPage() {
                           When a checker begins a live screen review, their 1080p screen will automatically broadcast here in real time.
                         </p>
                       </div>
-                      <div className="pt-2 flex items-center justify-center gap-3">
+                      <div className="pt-2 flex items-center justify-center">
                         <button
                           onClick={() => setActiveTab("vod")}
-                          className="px-4 py-2 bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] rounded-xl text-xs font-bold transition-all shadow cursor-pointer"
+                          className="px-5 py-2.5 bg-[#1F7A1F] dark:bg-[#55f761] hover:scale-105 active:scale-95 text-white dark:text-[#060D14] rounded-xl text-xs font-bold transition-all shadow-lg cursor-pointer flex items-center gap-2"
                         >
+                          <Film className="w-4 h-4" />
                           Browse Past Replays ({recordings.length})
-                        </button>
-                        <button
-                          onClick={() => setUseOwncastFeed(true)}
-                          className="px-3 py-2 bg-white/10 hover:bg-white/15 text-white/80 rounded-xl text-xs font-semibold transition-all cursor-pointer"
-                        >
-                          Show Owncast Server
                         </button>
                       </div>
                     </div>
@@ -1015,16 +1032,16 @@ export default function LivestreamPage() {
                       <h3 className="text-sm font-semibold text-[#0D1B2A] dark:text-white">
                         {liveSession ? liveSession.title : "Quality Audit Check Session"}
                       </h3>
-                      <p className="text-xs text-[#2F3E46]/70 dark:text-white/50">
+                      <p className="text-xs text-secondary/70 dark:text-white/50">
                         {liveSession
-                          ? `Host: ${liveSession.checkerName} • In-Browser Live Stream (<0.3s Latency)`
-                          : "Hosted by Lead Checkers • Powered by Cloudflare R2"}
+                          ? `Host: ${liveSession.checkerName} • Live Stream (<0.3s Latency)`
+                          : "Hosted by Lead Checkers • Real-Time Inspection Hub"}
                       </p>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2">
-                    <span className="flex items-center gap-1.5 px-3 py-1 bg-black/5 dark:bg-white/5 rounded-full text-xs font-medium text-[#2F3E46] dark:text-white/80">
+                    <span className="flex items-center gap-1.5 px-3 py-1 bg-black/5 dark:bg-white/5 rounded-full text-xs font-medium text-secondary dark:text-white/80">
                       <Users className="w-3.5 h-3.5 text-[#1F7A1F] dark:text-[#55f761]" />
                       <span>{liveViewerCount} / 10 in Lobby</span>
                     </span>
@@ -1042,18 +1059,26 @@ export default function LivestreamPage() {
                     </h3>
                   </div>
 
-                  <div className="space-y-2.5 text-xs text-[#2F3E46]/80 dark:text-white/70 leading-relaxed">
+                  <div className="space-y-2.5 text-xs text-secondary/80 dark:text-white/70 leading-relaxed">
                     <div className="flex items-center justify-between py-1.5 border-b border-black/5 dark:border-white/5">
                       <span>Stream Mode</span>
                       <span className="font-semibold text-[#0D1B2A] dark:text-white">
-                        {liveSession ? "WebRTC Peer Broadcast" : "HLS / Owncast"}
+                        WebRTC Real-Time
                       </span>
                     </div>
                     <div className="flex items-center justify-between py-1.5 border-b border-black/5 dark:border-white/5">
                       <span>Latency</span>
                       <span className="font-semibold text-emerald-600 dark:text-[#55f761]">
-                        {liveSession ? "< 0.3s (Real-Time)" : "3 - 5s (Edge Cached)"}
+                        &lt; 0.3s (Ultra-Low)
                       </span>
+                    </div>
+                    <div className="flex items-center justify-between py-1.5 border-b border-black/5 dark:border-white/5">
+                      <span>Resolution</span>
+                      <span className="font-semibold text-[#0D1B2A] dark:text-white">1080p @ 30 FPS</span>
+                    </div>
+                    <div className="flex items-center justify-between py-1.5 border-b border-black/5 dark:border-white/5">
+                      <span>Audio</span>
+                      <span className="font-semibold text-[#0D1B2A] dark:text-white">Mic &amp; System Audio</span>
                     </div>
                     <div className="flex items-center justify-between py-1.5 border-b border-black/5 dark:border-white/5">
                       <span>Lobby Capacity</span>
@@ -1061,26 +1086,8 @@ export default function LivestreamPage() {
                     </div>
                     <div className="flex items-center justify-between py-1.5">
                       <span>VOD Availability</span>
-                      <span className="font-semibold text-emerald-600 dark:text-[#55f761]">Immediate Replay</span>
+                      <span className="font-semibold text-emerald-600 dark:text-[#55f761]">Instant Replay</span>
                     </div>
-                  </div>
-
-                  <div className="pt-2 flex flex-col gap-2">
-                    <button
-                      onClick={() => setUseOwncastFeed(!useOwncastFeed)}
-                      className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 rounded-xl text-xs font-semibold text-[#0D1B2A] dark:text-white transition-all cursor-pointer"
-                    >
-                      {useOwncastFeed ? "Switch to WebRTC Live Room" : "Switch to Owncast Embed"}
-                    </button>
-                    <a
-                      href="https://stream.xfnite.cloud"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 rounded-xl text-xs font-semibold text-[#0D1B2A] dark:text-white transition-all cursor-pointer"
-                    >
-                      Open Standalone Server
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
                   </div>
                 </div>
 
@@ -1555,7 +1562,7 @@ export default function LivestreamPage() {
                         Upload Recorded Video Check
                       </h3>
                       <p className="text-xs text-[#2F3E46]/80 dark:text-white/60 leading-relaxed">
-                        Already have an audit recording file (.mp4, .webm)? Upload it directly to Cloudflare R2 to make it available to all labelers.
+                        Already have an audit recording file (.mp4, .webm)? Upload it directly to the Replay Library to make it available to all labelers.
                       </p>
                     </div>
 
