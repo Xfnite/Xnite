@@ -247,6 +247,34 @@ export async function deleteCheckRecordingAction(recordingId: string) {
       return { success: false, error: "Forbidden: Only Checkers and Staff can delete recordings." };
     }
 
+    // Verify ownership: only the creator of the video or an admin can delete it
+    let recording: any = null;
+    if ((prisma as any).checkRecording) {
+      recording = await (prisma as any).checkRecording.findUnique({
+        where: { id: recordingId },
+      });
+    } else {
+      const res = await pool.query('SELECT * FROM "CheckRecording" WHERE "id" = $1', [recordingId]);
+      recording = res.rows[0] || null;
+    }
+
+    if (!recording) {
+      return { success: false, error: "Recording not found." };
+    }
+
+    const cleanUserEmail = (user.email || "").trim().toLowerCase();
+    const cleanCheckerEmail = (recording.checkerEmail || "").trim().toLowerCase();
+    const cleanUserRole = (user.role || "").trim().toLowerCase();
+    const isOwner = cleanCheckerEmail && cleanUserEmail === cleanCheckerEmail;
+    const isAdmin = cleanUserRole === "admin";
+
+    if (!isOwner && !isAdmin) {
+      return {
+        success: false,
+        error: "Forbidden: You can only delete your own recorded checks.",
+      };
+    }
+
     if ((prisma as any).checkRecording) {
       await (prisma as any).checkRecording.delete({
         where: { id: recordingId },

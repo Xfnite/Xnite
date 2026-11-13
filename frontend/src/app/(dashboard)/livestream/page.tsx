@@ -573,6 +573,14 @@ export default function LivestreamPage() {
     }
   };
 
+  const canDeleteRecording = (recording?: any) => {
+    if (!recording || !currentUser) return false;
+    const userEmail = (currentUser.email || "").trim().toLowerCase();
+    const checkerEmail = (recording.checkerEmail || "").trim().toLowerCase();
+    const userRole = (currentUser.role || "").trim().toLowerCase();
+    return (checkerEmail && userEmail === checkerEmail) || userRole === "admin";
+  };
+
   // 1-Click Screen Share Capture & Live Broadcast with Microphone Audio
   const startScreenCapture = async () => {
     if (!navigator.mediaDevices?.getDisplayMedia) {
@@ -1163,7 +1171,7 @@ export default function LivestreamPage() {
                     <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-[#1F7A1F] dark:text-[#55f761] border border-emerald-500/20">
                       {selectedRecording.projectType}
                     </span>
-                    {isUserStaff && (
+                    {canDeleteRecording(selectedRecording) && (
                       <button
                         onClick={(e) => openDeleteModal(selectedRecording.id, e)}
                         className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all cursor-pointer"
@@ -1258,7 +1266,7 @@ export default function LivestreamPage() {
                       <span className="absolute top-2 left-2 px-2 py-0.5 rounded bg-emerald-500/80 text-[10px] text-white font-semibold">
                         {item.projectType}
                       </span>
-                      {isUserStaff && (
+                      {canDeleteRecording(item) && (
                         <button
                           onClick={(e) => openDeleteModal(item.id, e)}
                           className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/60 hover:bg-red-600 text-white transition-all z-10 cursor-pointer"
