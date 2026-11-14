@@ -17,6 +17,7 @@ import {
   Upload, 
   Users, 
   Play, 
+  Pause,
   ScreenShare, 
   Film, 
   Sparkles,
@@ -32,6 +33,7 @@ import {
   MicOff,
   Volume2,
   VolumeX,
+  Maximize,
   Trash2,
   Save,
   Check,
@@ -71,11 +73,7 @@ function getCookie(name: string): string | null {
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun1.l.google.com:19302" },
-  { urls: "stun:stun2.l.google.com:19302" },
-  { urls: "stun:stun3.l.google.com:19302" },
   { urls: "stun:stun.cloudflare.com:3478" },
-  { urls: "stun:stun.services.mozilla.com" },
   {
     urls: "turn:openrelay.metered.ca:80",
     username: "openrelay",
@@ -196,14 +194,26 @@ export default function LivestreamPage() {
   const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map()); // Checker buffer: viewerSocketId -> candidates
   const viewerPendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]); // Viewer buffer: candidates before remoteDescription
 
-  // Manual File Upload State
+  // Manual File Upload & Video Broadcast State
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadBlobUrl, setUploadBlobUrl] = useState<string | null>(null);
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadProjectType, setUploadProjectType] = useState("Standard Building");
+  const [uploadNotes, setUploadNotes] = useState("");
+  const [broadcastSource, setBroadcastSource] = useState<"screen" | "video" | null>(null);
+  const [saveToLibraryAfterStream, setSaveToLibraryAfterStream] = useState<boolean>(true);
+  const [videoDuration, setVideoDuration] = useState<number>(0);
+  const [videoCurrentTime, setVideoCurrentTime] = useState<number>(0);
+  const [isVideoPaused, setIsVideoPaused] = useState<boolean>(false);
+  const [isMonitorAudioMuted, setIsMonitorAudioMuted] = useState<boolean>(false);
 
-  // Keep Checker preview attached whenever capturing changes
+  const broadcastVideoRef = useRef<HTMLVideoElement | null>(null);
+  const monitorGainRef = useRef<GainNode | null>(null);
+  const mediaElementSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+
+  // Keep Checker preview attached whenever screen capturing changes
   useEffect(() => {
-    if (isCapturing && livePreviewRef.current) {
+    if (isCapturing && broadcastSource === "screen" && livePreviewRef.current) {
       livePreviewRef.current.muted = true;
       livePreviewRef.current.defaultMuted = true;
       const stream = screenStreamRef.current || mediaStreamRef.current;
@@ -212,7 +222,7 @@ export default function LivestreamPage() {
         livePreviewRef.current.play().catch(() => {});
       }
     }
-  }, [isCapturing]);
+  }, [isCapturing, broadcastSource]);
 
   // Viewer manually joins live stream
   const handleJoinStream = () => {
@@ -262,6 +272,25 @@ export default function LivestreamPage() {
       handleLeaveStream();
     }
   }, [activeTab]);
+
+  // Viewer low-latency buffer catchup: guarantees viewers stay locked to the real-time live edge
+  useEffect(() => {
+    if (!hasJoinedStream) return;
+    const interval = setInterval(() => {
+      const v = viewerVideoRef.current;
+      if (v && !v.paused && v.buffered.length > 0) {
+        try {
+          const bufferEnd = v.buffered.end(v.buffered.length - 1);
+          const lag = bufferEnd - v.currentTime;
+          // If playback drifted more than 0.35s behind the real-time live edge, jump to edge
+          if (lag > 0.35) {
+            v.currentTime = bufferEnd - 0.05;
+          }
+        } catch {}
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [hasJoinedStream]);
 
   // Setup Socket.io connection for real-time live streaming
   useEffect(() => {
@@ -346,6 +375,41 @@ export default function LivestreamPage() {
       setRecordingSeconds(0);
     });
 
+    // Dynamic adaptive bitrate budgeting:
+    // Prevents checker's upload pipe from saturating when multiple viewers watch.
+    // 1 viewer: 2.2 Mbps, 2 viewers: 1.6 Mbps each, 3-4: 1.2 Mbps each, 5+: 800 kbps each
+    const applyAdaptiveBitrate = () => {
+      const activePeers = peerConnectionsRef.current.size;
+      const targetBitrate = Math.max(
+        800_000,
+        Math.min(2_200_000, Math.floor(4_800_000 / Math.max(1, activePeers)))
+      );
+
+      peerConnectionsRef.current.forEach((peer) => {
+        peer.getSenders().forEach((s) => {
+          if (s.track?.kind === "video") {
+            try {
+              const params = s.getParameters();
+              if (params.encodings && params.encodings.length > 0) {
+                params.encodings[0].maxBitrate = targetBitrate;
+                params.encodings[0].maxFramerate = 30;
+                params.degradationPreference = "maintain-framerate";
+
+                const vWidth = broadcastVideoRef.current?.videoWidth || 1920;
+                if (vWidth > 1920) {
+                  params.encodings[0].scaleResolutionDownBy = +(vWidth / 1920).toFixed(2);
+                } else {
+                  params.encodings[0].scaleResolutionDownBy = 1;
+                }
+
+                s.setParameters(params).catch(() => {});
+              }
+            } catch {}
+          }
+        });
+      });
+    };
+
     // --- CHECKER SIDE: When a viewer joins the room, send WebRTC offer ---
     socket.on("livestream:viewer_joined", async ({ viewerSocketId }) => {
       setLiveViewerCount((prev) => Math.max(prev + 1, peerConnectionsRef.current.size + 1));
@@ -357,7 +421,19 @@ export default function LivestreamPage() {
 
       pc.oniceconnectionstatechange = () => {
         console.log(`[Checker ICE] ${viewerSocketId}: ${pc.iceConnectionState}`);
+        if (pc.iceConnectionState === "failed") {
+          try {
+            (pc as any).restartIce?.();
+          } catch {}
+        }
       };
+
+      // Add tracks with resolution clamping and maintain-framerate preference
+      const activePeers = peerConnectionsRef.current.size;
+      const targetBitrate = Math.max(
+        800_000,
+        Math.min(2_200_000, Math.floor(4_800_000 / Math.max(1, activePeers)))
+      );
 
       mediaStreamRef.current.getTracks().forEach((track) => {
         const sender = pc.addTrack(track, mediaStreamRef.current!);
@@ -367,12 +443,43 @@ export default function LivestreamPage() {
             if (!params.encodings || params.encodings.length === 0) {
               params.encodings = [{}];
             }
-            params.encodings[0].maxBitrate = 2_500_000; // 2.5 Mbps cap prevents bandwidth lag
+            params.encodings[0].maxBitrate = targetBitrate;
+            params.encodings[0].maxFramerate = 30;
             params.degradationPreference = "maintain-framerate";
+
+            const vWidth = broadcastVideoRef.current?.videoWidth || 1920;
+            if (vWidth > 1920) {
+              params.encodings[0].scaleResolutionDownBy = +(vWidth / 1920).toFixed(2);
+            } else {
+              params.encodings[0].scaleResolutionDownBy = 1;
+            }
+
             sender.setParameters(params).catch(() => {});
           } catch {}
         }
       });
+
+      // Prioritize hardware-accelerated VP8 and H264 codecs
+      try {
+        if ("setCodecPreferences" in RTCRtpTransceiver.prototype && (window as any).RTCRtpReceiver?.getCapabilities) {
+          const transceivers = pc.getTransceivers();
+          const videoTransceiver = transceivers.find((t) => t.sender.track?.kind === "video");
+          if (videoTransceiver) {
+            const caps = (window as any).RTCRtpReceiver.getCapabilities("video");
+            if (caps?.codecs) {
+              const preferred = caps.codecs.filter(
+                (c: any) => c.mimeType.toLowerCase() === "video/vp8" || c.mimeType.toLowerCase() === "video/h264"
+              );
+              const rest = caps.codecs.filter(
+                (c: any) => c.mimeType.toLowerCase() !== "video/vp8" && c.mimeType.toLowerCase() !== "video/h264"
+              );
+              if (preferred.length > 0) {
+                videoTransceiver.setCodecPreferences([...preferred, ...rest]);
+              }
+            }
+          }
+        }
+      } catch {}
 
       pc.onicecandidate = (event) => {
         if (event.candidate) {
@@ -384,12 +491,28 @@ export default function LivestreamPage() {
       };
 
       try {
-        const offer = await pc.createOffer();
+        let offer = await pc.createOffer({
+          offerToReceiveAudio: false,
+          offerToReceiveVideo: false,
+        });
+
+        // Optimize SDP: Enable Opus in-band FEC and DTX for zero audio stutter
+        if (offer.sdp) {
+          let sdp = offer.sdp;
+          sdp = sdp.replace(
+            /a=rtpmap:(\d+) opus\/48000\/2/g,
+            "a=rtpmap:$1 opus/48000/2\r\na=fmtp:$1 minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=128000"
+          );
+          offer = new RTCSessionDescription({ type: offer.type, sdp });
+        }
+
         await pc.setLocalDescription(offer);
         socket.emit("livestream:signal", {
           targetSocketId: viewerSocketId,
           signal: { sdp: offer },
         });
+
+        applyAdaptiveBitrate();
       } catch (err) {
         console.error("Failed to create WebRTC offer:", err);
       }
@@ -403,6 +526,7 @@ export default function LivestreamPage() {
       }
       pendingCandidatesRef.current.delete(viewerSocketId);
       setLiveViewerCount(() => peerConnectionsRef.current.size);
+      applyAdaptiveBitrate();
     });
 
     // --- VIEWER & CHECKER: Handle incoming WebRTC signals ---
@@ -701,6 +825,7 @@ export default function LivestreamPage() {
       const title = sessionTitle || `Quality Audit Check - ${new Date().toLocaleDateString()}`;
       setSessionTitle(title);
       setIsCapturing(true);
+      setBroadcastSource("screen");
       setRecordingSeconds(0);
 
       // Broadcast to all viewers via Socket.io that checker is LIVE
@@ -708,6 +833,7 @@ export default function LivestreamPage() {
         socketRef.current.emit("livestream:checker_start", {
           title,
           projectType: sessionProjectType,
+          broadcastType: "screen",
         });
       }
 
@@ -810,6 +936,7 @@ export default function LivestreamPage() {
         setRecordedBlobUrl(null);
         setIsReviewing(false);
         setIsUploading(false);
+        setBroadcastSource(null);
         await loadRecordings();
         setSelectedRecording(data.recording);
         setActiveTab("vod");
@@ -831,6 +958,7 @@ export default function LivestreamPage() {
     setIsReviewing(false);
     setRecordedDuration(0);
     setRecordingSeconds(0);
+    setBroadcastSource(null);
     toast.info("Recording discarded. Nothing was saved to the library.");
   };
 
@@ -854,27 +982,273 @@ export default function LivestreamPage() {
     mediaRecorderRef.current = null;
     if (livePreviewRef.current) livePreviewRef.current.srcObject = null;
     setIsCapturing(false);
+    setBroadcastSource(null);
     setRecordingSeconds(0);
     toast.info("Live recording cancelled and discarded.");
   };
 
-  // Handle Manual File Upload
-  const handleManualUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!uploadFile) {
+  // Handle file selection from input
+  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (uploadBlobUrl) URL.revokeObjectURL(uploadBlobUrl);
+      const url = URL.createObjectURL(file);
+      setUploadFile(file);
+      setUploadBlobUrl(url);
+      const cleanName = file.name.replace(/\.[^/.]+$/, "");
+      setUploadTitle(cleanName);
+      setUploadNotes("");
+      setVideoCurrentTime(0);
+
+      const tempVideo = document.createElement("video");
+      tempVideo.preload = "metadata";
+      tempVideo.src = url;
+      tempVideo.onloadedmetadata = () => {
+        setVideoDuration(Math.round(tempVideo.duration || 0));
+      };
+    }
+  };
+
+  // Start Video Broadcast (Checker Studio)
+  const startVideoBroadcast = () => {
+    if (!uploadFile || !uploadBlobUrl) {
       toast.error("Please choose a video file first.");
       return;
     }
 
+    if (liveSession && (!currentUser || liveSession.checkerEmail?.toLowerCase() !== currentUser.email?.toLowerCase())) {
+      toast.error(`Checker "${liveSession.checkerName}" is currently live. You can join the broadcast queue to be next!`);
+      return;
+    }
+
+    if (isAnotherCheckerReserved && reservedChecker) {
+      toast.error(`Broadcast slot is currently reserved for ${reservedChecker.name}. You can join the queue behind them.`);
+      return;
+    }
+
+    const title = uploadTitle?.trim() || uploadFile.name.replace(/\.[^/.]+$/, "");
+    setSessionTitle(title);
+    setSessionProjectType(uploadProjectType);
+    setSessionNotes(uploadNotes);
+    setBroadcastSource("video");
+    setIsCapturing(true);
+    setRecordingSeconds(0);
+    setVideoCurrentTime(0);
+    setIsVideoPaused(false);
+  };
+
+  // Hook to initiate WebRTC capture once video player mounts in Studio
+  useEffect(() => {
+    if (!isCapturing || broadcastSource !== "video") return;
+
+    let isCancelled = false;
+
+    const setupVideoStream = async () => {
+      const video = broadcastVideoRef.current;
+      if (!video) return;
+
+      try {
+        video.currentTime = 0;
+        await video.play();
+        if (isCancelled) return;
+
+        const captureFn = (video as any).captureStream || (video as any).mozCaptureStream;
+        if (!captureFn) {
+          toast.error("Browser does not support video streaming. Please use Chrome, Edge, or Firefox.");
+          setIsCapturing(false);
+          setBroadcastSource(null);
+          return;
+        }
+
+        const videoStream: MediaStream = captureFn.call(video, 30);
+
+        const videoTrack = videoStream.getVideoTracks()[0];
+        if (videoTrack && "contentHint" in videoTrack) {
+          videoTrack.contentHint = "detail";
+        }
+
+        // Capture checker microphone if available
+        let micStream: MediaStream | null = null;
+        try {
+          micStream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+          });
+          micStreamRef.current = micStream;
+          setIsMicEnabled(true);
+        } catch {
+          console.warn("Microphone not available; streaming video audio only.");
+        }
+
+        let combinedAudioTracks: MediaStreamTrack[] = [];
+        const hasVideoAudio = videoStream.getAudioTracks().length > 0;
+        const hasMicAudio = micStream && micStream.getAudioTracks().length > 0;
+
+        if (hasVideoAudio || hasMicAudio) {
+          try {
+            const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({
+              sampleRate: 48000,
+              latencyHint: "interactive",
+            });
+            audioContextRef.current = audioCtx;
+            const dest = audioCtx.createMediaStreamDestination();
+
+            if (hasVideoAudio) {
+              if (!mediaElementSourceRef.current) {
+                mediaElementSourceRef.current = audioCtx.createMediaElementSource(video);
+              }
+              const sourceNode = mediaElementSourceRef.current;
+              sourceNode.connect(dest);
+
+              const monitorGain = audioCtx.createGain();
+              monitorGain.gain.value = isMonitorAudioMuted ? 0 : 0.8;
+              sourceNode.connect(monitorGain);
+              monitorGain.connect(audioCtx.destination);
+              monitorGainRef.current = monitorGain;
+            }
+
+            if (hasMicAudio && micStream) {
+              const micSource = audioCtx.createMediaStreamSource(micStream);
+              micSource.connect(dest);
+            }
+
+            combinedAudioTracks = dest.stream.getAudioTracks();
+          } catch (audioErr) {
+            console.warn("Web Audio mix fallback:", audioErr);
+            if (hasVideoAudio) {
+              combinedAudioTracks = videoStream.getAudioTracks();
+            } else if (hasMicAudio) {
+              combinedAudioTracks = micStream!.getAudioTracks();
+            }
+          }
+        }
+
+        const combinedStream = new MediaStream([
+          videoTrack,
+          ...combinedAudioTracks,
+        ]);
+
+        mediaStreamRef.current = combinedStream;
+
+        const broadcastTitle = sessionTitle || uploadTitle || uploadFile?.name || "Quality Audit Check";
+        const broadcastType = sessionProjectType || uploadProjectType;
+
+        if (socketRef.current) {
+          socketRef.current.emit("livestream:checker_start", {
+            title: broadcastTitle,
+            projectType: broadcastType,
+            broadcastType: "video",
+          });
+        }
+
+        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = setInterval(() => {
+          setRecordingSeconds((prev) => prev + 1);
+        }, 1000);
+
+        toast.success("Live broadcast started! Video check is streaming live to all viewers.");
+      } catch (err: any) {
+        console.error("Video broadcast error:", err);
+        toast.error("Failed to start video broadcast: " + (err.message || "Unknown error"));
+        setIsCapturing(false);
+        setBroadcastSource(null);
+      }
+    };
+
+    setupVideoStream();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isCapturing, broadcastSource]);
+
+  // Finish Video Broadcast (opens Review screen)
+  const finishVideoBroadcast = () => {
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+
+    if (socketRef.current) {
+      socketRef.current.emit("livestream:checker_stop");
+    }
+
+    peerConnectionsRef.current.forEach((pc) => pc.close());
+    peerConnectionsRef.current.clear();
+    setLiveViewerCount(0);
+
+    if (broadcastVideoRef.current) {
+      broadcastVideoRef.current.pause();
+    }
+
+    micStreamRef.current?.getTracks().forEach((track) => track.stop());
+    micStreamRef.current = null;
+    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mediaStreamRef.current = null;
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    monitorGainRef.current = null;
+    mediaElementSourceRef.current = null;
+
+    const finalDuration = videoCurrentTime || videoDuration || recordingSeconds || 0;
+    setRecordedDuration(finalDuration);
+    setIsCapturing(false);
+    setIsReviewing(true);
+    toast.info("Session ended. Review your video check below to publish to the library or discard.");
+  };
+
+  // Discard Video Broadcast while actively live
+  const discardVideoBroadcast = () => {
+    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    if (socketRef.current) socketRef.current.emit("livestream:checker_stop");
+    peerConnectionsRef.current.forEach((pc) => pc.close());
+    peerConnectionsRef.current.clear();
+    setLiveViewerCount(0);
+
+    if (broadcastVideoRef.current) {
+      broadcastVideoRef.current.pause();
+      broadcastVideoRef.current.currentTime = 0;
+    }
+
+    micStreamRef.current?.getTracks().forEach((t) => t.stop());
+    micStreamRef.current = null;
+    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+    mediaStreamRef.current = null;
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    monitorGainRef.current = null;
+    mediaElementSourceRef.current = null;
+
+    setIsCapturing(false);
+    setBroadcastSource(null);
+    setRecordingSeconds(0);
+    setVideoCurrentTime(0);
+    toast.info("Live video broadcast cancelled.");
+  };
+
+  // Publish Uploaded Video to Replay Library
+  const handlePublishVideoFile = async () => {
+    if (!uploadFile) return;
+
     setIsUploading(true);
-    toast.info("Uploading video check to Replay Library...");
+    toast.info("Publishing video check to Replay Library...");
 
     try {
       const formData = new FormData();
       formData.append("file", uploadFile);
-      formData.append("title", uploadTitle || uploadFile.name);
-      formData.append("projectType", uploadProjectType);
-      formData.append("durationSec", "0");
+      formData.append("title", sessionTitle || uploadTitle || uploadFile.name);
+      formData.append("projectType", sessionProjectType || uploadProjectType);
+      formData.append("durationSec", String(recordedDuration || videoDuration || 0));
+      formData.append("description", sessionNotes || uploadNotes);
 
       const response = await fetch("/api/livestream/upload", {
         method: "POST",
@@ -883,9 +1257,109 @@ export default function LivestreamPage() {
 
       const data = await response.json();
       if (data.success && data.recording) {
-        toast.success("Video check uploaded successfully!");
+        toast.success("Check session successfully published to Replay Library!");
+        if (uploadBlobUrl) URL.revokeObjectURL(uploadBlobUrl);
         setUploadFile(null);
+        setUploadBlobUrl(null);
         setUploadTitle("");
+        setUploadNotes("");
+        setIsReviewing(false);
+        setIsUploading(false);
+        setBroadcastSource(null);
+        await loadRecordings();
+        setSelectedRecording(data.recording);
+        setActiveTab("vod");
+      } else {
+        toast.error(data.error || "Failed to save video to library.");
+        setIsUploading(false);
+      }
+    } catch (err: any) {
+      toast.error("Upload error: " + (err.message || "Failed to upload."));
+      setIsUploading(false);
+    }
+  };
+
+  // Discard Uploaded Video Broadcast without saving to library
+  const handleDiscardVideoBroadcast = () => {
+    if (uploadBlobUrl) URL.revokeObjectURL(uploadBlobUrl);
+    setUploadFile(null);
+    setUploadBlobUrl(null);
+    setUploadTitle("");
+    setUploadNotes("");
+    setIsReviewing(false);
+    setRecordedDuration(0);
+    setRecordingSeconds(0);
+    setBroadcastSource(null);
+    toast.info("Livestream finished. Video was not saved to Replay Library.");
+  };
+
+  // Video playback controls
+  const toggleVideoPlayPause = () => {
+    const video = broadcastVideoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      video.play().catch(() => {});
+      setIsVideoPaused(false);
+    } else {
+      video.pause();
+      setIsVideoPaused(true);
+    }
+  };
+
+  const handleVideoSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newTime = Number(e.target.value);
+    setVideoCurrentTime(newTime);
+    if (broadcastVideoRef.current) {
+      broadcastVideoRef.current.currentTime = newTime;
+    }
+  };
+
+  const toggleMonitorAudio = () => {
+    setIsMonitorAudioMuted((prev) => {
+      const next = !prev;
+      if (monitorGainRef.current) {
+        monitorGainRef.current.gain.value = next ? 0 : 0.8;
+      }
+      if (broadcastVideoRef.current && !monitorGainRef.current) {
+        broadcastVideoRef.current.muted = next;
+      }
+      toast.info(next ? "Local monitor audio muted 🔇" : "Local monitor audio active 🔊");
+      return next;
+    });
+  };
+
+  // Handle Manual File Upload (Direct upload without livestreaming)
+  const handleManualUpload = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!uploadFile) {
+      toast.error("Please choose a video file first.");
+      return;
+    }
+
+    setIsUploading(true);
+    toast.info("Uploading video check directly to Replay Library...");
+
+    try {
+      const formData = new FormData();
+      formData.append("file", uploadFile);
+      formData.append("title", uploadTitle || uploadFile.name);
+      formData.append("projectType", uploadProjectType);
+      formData.append("durationSec", String(videoDuration || 0));
+      formData.append("description", uploadNotes);
+
+      const response = await fetch("/api/livestream/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+      if (data.success && data.recording) {
+        toast.success("Video check uploaded successfully to Replay Library!");
+        if (uploadBlobUrl) URL.revokeObjectURL(uploadBlobUrl);
+        setUploadFile(null);
+        setUploadBlobUrl(null);
+        setUploadTitle("");
+        setUploadNotes("");
         setIsUploading(false);
         await loadRecordings();
         setSelectedRecording(data.recording);
@@ -1016,7 +1490,6 @@ export default function LivestreamPage() {
                           autoPlay
                           playsInline
                           muted={isViewerMuted}
-                          controls
                           onLoadedMetadata={(e) => {
                             (e.target as HTMLVideoElement).play().catch(() => {});
                           }}
@@ -1027,10 +1500,25 @@ export default function LivestreamPage() {
                         />
                         <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/90 text-white text-xs font-bold uppercase tracking-wider shadow-lg">
                           <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                          LIVE: {liveSession.checkerName}
+                          {liveSession.broadcastType === "video" ? "LIVE VIDEO AUDIT: " : "LIVE: "}{liveSession.checkerName}
                         </div>
 
                         <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              if (viewerVideoRef.current) {
+                                if (!document.fullscreenElement) {
+                                  viewerVideoRef.current.requestFullscreen().catch(() => {});
+                                } else {
+                                  document.exitFullscreen().catch(() => {});
+                                }
+                              }
+                            }}
+                            className="p-1.5 rounded-xl bg-black/70 hover:bg-black/90 text-white text-xs font-semibold flex items-center justify-center border border-white/20 transition-all cursor-pointer backdrop-blur-md"
+                            title="Toggle Fullscreen"
+                          >
+                            <Maximize className="w-3.5 h-3.5" />
+                          </button>
                           <button
                             onClick={() => {
                               if (socketRef.current) {
@@ -1062,23 +1550,34 @@ export default function LivestreamPage() {
                           </div>
                         )}
 
-                        {/* Unmute overlay button if muted */}
-                        {isViewerMuted && (
+                        {/* Unmute / Audio Overlay Toggle */}
+                        <div className="absolute bottom-4 right-4 z-30 flex items-center gap-2">
                           <button
-                            onClick={unmuteViewer}
-                            className="absolute bottom-16 right-4 z-30 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-2xl flex items-center gap-2 cursor-pointer border border-white/20 hover:scale-105 transition-all"
+                            onClick={() => {
+                              if (isViewerMuted) {
+                                unmuteViewer();
+                              } else {
+                                setIsViewerMuted(true);
+                                if (viewerVideoRef.current) viewerVideoRef.current.muted = true;
+                              }
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold shadow-xl flex items-center gap-1.5 cursor-pointer border transition-all backdrop-blur-md ${
+                              isViewerMuted
+                                ? "bg-emerald-600 hover:bg-emerald-500 text-white border-white/20 animate-pulse"
+                                : "bg-black/70 hover:bg-black/90 text-white border-white/20"
+                            }`}
                           >
-                            <Volume2 className="w-4 h-4 animate-bounce" />
-                            Click to Unmute / Hear Checker 🔊
+                            {isViewerMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                            <span>{isViewerMuted ? "Click to Unmute / Hear 🔊" : "Mute Sound"}</span>
                           </button>
-                        )}
+                        </div>
                       </div>
                     ) : (
                       /* Live Broadcast In Progress - User Click to Join */
                       <div className="relative w-full h-full bg-gradient-to-br from-[#060D14] via-[#0D1B2A] to-[#060D14] p-8 flex flex-col items-center justify-center text-center space-y-4">
                         <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/20 border border-red-500/40 text-red-400 text-xs font-bold uppercase tracking-wider">
                           <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
-                          Live Quality Audit in Progress
+                          {liveSession.broadcastType === "video" ? "Live Video Audit Inspection in Progress" : "Live Quality Audit in Progress"}
                         </div>
 
                         <div className="space-y-1.5 max-w-md">
@@ -1115,7 +1614,9 @@ export default function LivestreamPage() {
                         </div>
 
                         <p className="text-[11px] text-white/40">
-                          Click to join and receive real-time 1080p screen share &amp; audio
+                          {liveSession.broadcastType === "video"
+                            ? "Click to join and watch real-time synchronized video inspection & live commentary"
+                            : "Click to join and receive real-time 1080p screen share & audio"}
                         </p>
                       </div>
                     )
@@ -1306,7 +1807,7 @@ export default function LivestreamPage() {
         {/* Tab 3: Checker Studio (Only for Staff/Checkers) */}
         {activeTab === "studio" && isUserStaff && (
           <div className="space-y-6">
-            {/* If Screen Share is Active -> Show Full Studio Recorder */}
+            {/* If Screen Share or Video Broadcast is Active -> Show Full Studio Recorder */}
             {isCapturing ? (
               <div className="bg-white/80 dark:bg-[#060D14]/80 backdrop-blur-md rounded-2xl border-2 border-emerald-500/40 p-6 space-y-6 shadow-2xl">
                 {/* Active Live Header Bar */}
@@ -1314,10 +1815,12 @@ export default function LivestreamPage() {
                   <div className="flex items-center gap-3">
                     <span className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-500/10 text-red-500 font-bold text-xs uppercase tracking-wide border border-red-500/20">
                       <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
-                      REC &bull; LIVE SCREEN SHARE
+                      {broadcastSource === "video" ? "REC • LIVE VIDEO BROADCAST" : "REC • LIVE SCREEN SHARE"}
                     </span>
                     <span className="font-mono text-base font-bold text-[#0D1B2A] dark:text-white">
-                      {formatTimer(recordingSeconds)}
+                      {broadcastSource === "video"
+                        ? `${formatTimer(videoCurrentTime)} / ${formatTimer(videoDuration)}`
+                        : formatTimer(recordingSeconds)}
                     </span>
                     <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/5 dark:bg-white/10 text-xs font-medium text-[#2F3E46] dark:text-white/80">
                       <Users className="w-3.5 h-3.5 text-[#1F7A1F] dark:text-[#55f761]" />
@@ -1332,26 +1835,42 @@ export default function LivestreamPage() {
                           ? "bg-emerald-500/10 text-emerald-600 dark:text-[#55f761] border-emerald-500/20"
                           : "bg-red-500/10 text-red-500 border-red-500/20"
                       }`}
-                      title="Click to Mute or Unmute your Microphone"
+                      title="Click to Mute or Unmute your Microphone commentary"
                     >
                       {isMicEnabled ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
                       <span>{isMicEnabled ? "Mic: ON" : "Mic: MUTED"}</span>
                     </button>
+
+                    {/* Local Speaker Sound Toggle (For video broadcasts) */}
+                    {broadcastSource === "video" && (
+                      <button
+                        onClick={toggleMonitorAudio}
+                        className={`flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
+                          !isMonitorAudioMuted
+                            ? "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/20"
+                            : "bg-neutral-500/10 text-neutral-500 border-neutral-500/20"
+                        }`}
+                        title="Mute or Unmute your local monitor speaker without affecting the stream"
+                      >
+                        {!isMonitorAudioMuted ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+                        <span>{!isMonitorAudioMuted ? "Sound: ON" : "Sound: MUTED"}</span>
+                      </button>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={discardCapture}
+                      onClick={broadcastSource === "video" ? discardVideoBroadcast : discardCapture}
                       className="px-4 py-2 rounded-xl text-xs font-semibold text-red-600 hover:bg-red-500/10 transition-all cursor-pointer"
                     >
                       Discard
                     </button>
                     <button
-                      onClick={finishScreenCapture}
+                      onClick={broadcastSource === "video" ? finishVideoBroadcast : finishScreenCapture}
                       className="flex items-center gap-2 px-5 py-2.5 bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] rounded-xl text-xs font-bold shadow-lg hover:scale-102 active:scale-98 transition-all cursor-pointer"
                     >
                       <Square className="w-4 h-4 fill-current" />
-                      End Session & Review
+                      End Session &amp; Review
                     </button>
                   </div>
                 </div>
@@ -1359,30 +1878,84 @@ export default function LivestreamPage() {
                 {/* Studio Layout: Video Monitor + Metadata Controls */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                   {/* Live Video Monitor */}
-                  <div className="lg:col-span-2 space-y-2">
-                    <span className="text-xs font-semibold text-[#2F3E46]/70 dark:text-white/50 block">
-                      Live Monitor Preview (What Viewers See in Real Time)
-                    </span>
-                    <div className="relative aspect-video w-full bg-black rounded-xl overflow-hidden border border-black/20 dark:border-white/20 shadow-inner flex items-center justify-center">
-                      <video
-                        ref={(el) => {
-                          livePreviewRef.current = el;
-                          if (el) {
-                            el.muted = true;
-                            el.defaultMuted = true;
-                            const stream = screenStreamRef.current || mediaStreamRef.current;
-                            if (stream && el.srcObject !== stream) {
-                              el.srcObject = stream;
-                              el.play().catch(() => {});
-                            }
-                          }
-                        }}
-                        autoPlay
-                        playsInline
-                        muted
-                        className="w-full h-full object-contain"
-                      />
+                  <div className="lg:col-span-2 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-[#2F3E46]/70 dark:text-white/50 block">
+                        {broadcastSource === "video"
+                          ? "Live Video Broadcast Monitor (Viewers see real-time playback)"
+                          : "Live Monitor Preview (What Viewers See in Real Time)"}
+                      </span>
+                      {broadcastSource === "video" && (
+                        <span className="text-[11px] text-emerald-600 dark:text-[#55f761] font-semibold flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          Real-time WebRTC feed synced
+                        </span>
+                      )}
                     </div>
+
+                    <div className="relative aspect-video w-full bg-black rounded-xl overflow-hidden border border-black/20 dark:border-white/20 shadow-inner flex items-center justify-center group">
+                      {broadcastSource === "video" ? (
+                        <>
+                          <video
+                            ref={broadcastVideoRef}
+                            src={uploadBlobUrl || undefined}
+                            playsInline
+                            onTimeUpdate={(e) => {
+                              setVideoCurrentTime(Math.round(e.currentTarget.currentTime));
+                            }}
+                            onEnded={finishVideoBroadcast}
+                            onPlay={() => setIsVideoPaused(false)}
+                            onPause={() => setIsVideoPaused(true)}
+                            className="w-full h-full object-contain"
+                          />
+                          {/* Play/Pause Overlay Toggle */}
+                          <button
+                            onClick={toggleVideoPlayPause}
+                            className="absolute inset-0 m-auto w-16 h-16 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-xl backdrop-blur-xs"
+                          >
+                            {isVideoPaused ? <Play className="w-7 h-7 fill-current ml-1" /> : <Pause className="w-7 h-7 fill-current" />}
+                          </button>
+                        </>
+                      ) : (
+                        <video
+                          ref={livePreviewRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className="w-full h-full object-contain"
+                        />
+                      )}
+                    </div>
+
+                    {/* Video Scrubber Controls for Video Broadcast */}
+                    {broadcastSource === "video" && (
+                      <div className="p-3 bg-black/5 dark:bg-white/5 rounded-xl border border-black/5 dark:border-white/5 flex items-center gap-3">
+                        <button
+                          onClick={toggleVideoPlayPause}
+                          className="p-2 rounded-lg bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0"
+                          title={isVideoPaused ? "Play" : "Pause"}
+                        >
+                          {isVideoPaused ? <Play className="w-4 h-4 fill-current ml-0.5" /> : <Pause className="w-4 h-4 fill-current" />}
+                        </button>
+
+                        <span className="font-mono text-xs text-[#0D1B2A] dark:text-white shrink-0">
+                          {formatTimer(videoCurrentTime)}
+                        </span>
+
+                        <input
+                          type="range"
+                          min="0"
+                          max={videoDuration || 100}
+                          value={videoCurrentTime}
+                          onChange={handleVideoSeek}
+                          className="w-full accent-[#1F7A1F] dark:accent-[#55f761] cursor-pointer"
+                        />
+
+                        <span className="font-mono text-xs text-[#2F3E46]/60 dark:text-white/50 shrink-0">
+                          {formatTimer(videoDuration)}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* Session Metadata Inputs */}
@@ -1415,9 +1988,9 @@ export default function LivestreamPage() {
                           className="w-full px-3 py-2 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 text-xs text-[#0D1B2A] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#55f761]"
                         >
                           <option value="Standard Building" className="text-black">Standard Building</option>
-                          <option value="Transportation" className="text-black">Transportation & Roads</option>
+                          <option value="Transportation" className="text-black">Transportation &amp; Roads</option>
                           <option value="Land Cover" className="text-black">Land Cover</option>
-                          <option value="Guidelines" className="text-black">Guidelines & Common Mistakes</option>
+                          <option value="Guidelines" className="text-black">Guidelines &amp; Common Mistakes</option>
                         </select>
                       </div>
 
@@ -1433,11 +2006,36 @@ export default function LivestreamPage() {
                           className="w-full px-3 py-2 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 text-xs text-[#0D1B2A] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#55f761]"
                         />
                       </div>
+
+                      {/* Quick toggle for Save to Library setting */}
+                      {broadcastSource === "video" && (
+                        <div className="p-3 bg-black/5 dark:bg-white/5 rounded-xl border border-black/5 dark:border-white/5 flex items-center justify-between">
+                          <div>
+                            <span className="text-[11px] font-semibold text-[#0D1B2A] dark:text-white block">
+                              Save to Replay Library
+                            </span>
+                            <span className="text-[10px] text-[#2F3E46]/60 dark:text-white/50">
+                              {saveToLibraryAfterStream ? "Will prompt to save when ended" : "Livestream only (no library save)"}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSaveToLibraryAfterStream(!saveToLibraryAfterStream)}
+                            className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-all cursor-pointer ${
+                              saveToLibraryAfterStream
+                                ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30"
+                                : "bg-neutral-500/20 text-neutral-600 dark:text-neutral-400 border border-neutral-500/30"
+                            }`}
+                          >
+                            {saveToLibraryAfterStream ? "Enabled" : "Disabled"}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
               </div>
-            ) : isReviewing && recordedBlobUrl ? (
+            ) : isReviewing && (recordedBlobUrl || uploadBlobUrl) ? (
               /* Review & Post-Recording Confirmation Screen */
               <div className="bg-white/85 dark:bg-[#060D14]/85 backdrop-blur-md rounded-2xl border-2 border-emerald-500/30 p-6 space-y-6 shadow-2xl">
                 {/* Header with Save / Discard Actions */}
@@ -1445,31 +2043,37 @@ export default function LivestreamPage() {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 font-bold text-xs uppercase tracking-wide border border-blue-500/20">
-                        Check Finished
+                        {broadcastSource === "video" ? "Video Check Finished" : "Check Finished"}
                       </span>
                       <span className="text-xs text-[#2F3E46]/60 dark:text-white/50 font-mono">
                         Duration: {formatTimer(recordedDuration)}
                       </span>
                     </div>
                     <h3 className="text-lg font-bold text-[#0D1B2A] dark:text-white mt-1">
-                      Review Audit Recording Before Saving
+                      {broadcastSource === "video"
+                        ? "Review Video Check Before Saving to Library"
+                        : "Review Audit Recording Before Saving"}
                     </h3>
                     <p className="text-xs text-[#2F3E46]/70 dark:text-white/60">
-                      Play your recording to verify sound and quality. You can publish it to the Replay Library or discard it completely.
+                      {broadcastSource === "video"
+                        ? saveToLibraryAfterStream
+                          ? "Your live broadcast has finished. You can publish this video check to the Replay Library or finish without saving."
+                          : "You selected Livestream Only. You can still save it to the Replay Library below if you wish, or finish without saving."
+                        : "Play your recording to verify sound and quality. You can publish it to the Replay Library or discard it completely."}
                     </p>
                   </div>
 
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={handleDiscardRecording}
+                      onClick={broadcastSource === "video" ? handleDiscardVideoBroadcast : handleDiscardRecording}
                       disabled={isUploading}
                       className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold text-red-600 hover:bg-red-500/10 border border-red-500/20 transition-all cursor-pointer"
                     >
                       <Trash2 className="w-4 h-4" />
-                      Discard Recording
+                      {broadcastSource === "video" ? "Finish (Do Not Save to Library)" : "Discard Recording"}
                     </button>
                     <button
-                      onClick={handlePublishRecording}
+                      onClick={broadcastSource === "video" ? handlePublishVideoFile : handlePublishRecording}
                       disabled={isUploading}
                       className="flex items-center gap-2 px-6 py-2.5 bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] rounded-xl text-xs font-bold shadow-lg hover:scale-102 active:scale-98 transition-all cursor-pointer"
                     >
@@ -1495,9 +2099,9 @@ export default function LivestreamPage() {
                     <span className="text-xs font-semibold text-[#2F3E46]/70 dark:text-white/50 block">
                       Playback Preview (Check your voice and screen)
                     </span>
-                    {recordedBlobUrl ? (
+                    {(recordedBlobUrl || uploadBlobUrl) ? (
                       <XfnitePlayer
-                        src={recordedBlobUrl}
+                        src={(recordedBlobUrl || uploadBlobUrl)!}
                         title={sessionTitle || "Quality Audit Check Preview"}
                         initialDuration={recordedDuration}
                         autoPlay={false}
@@ -1538,9 +2142,9 @@ export default function LivestreamPage() {
                           className="w-full px-3 py-2 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 text-xs text-[#0D1B2A] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#55f761]"
                         >
                           <option value="Standard Building" className="text-black">Standard Building</option>
-                          <option value="Transportation" className="text-black">Transportation & Roads</option>
+                          <option value="Transportation" className="text-black">Transportation &amp; Roads</option>
                           <option value="Land Cover" className="text-black">Land Cover</option>
-                          <option value="Guidelines" className="text-black">Guidelines & Common Mistakes</option>
+                          <option value="Guidelines" className="text-black">Guidelines &amp; Common Mistakes</option>
                         </select>
                       </div>
 
@@ -1564,7 +2168,7 @@ export default function LivestreamPage() {
               <div className="bg-white/70 dark:bg-[#060D14]/70 backdrop-blur-md rounded-2xl border border-black/5 dark:border-white/10 p-6 space-y-6">
                 <div>
                   <h2 className="text-lg font-bold text-[#0D1B2A] dark:text-white">
-                    Checker Broadcast & Recording Studio
+                    Checker Broadcast &amp; Recording Studio
                   </h2>
                   <p className="text-xs text-[#2F3E46]/70 dark:text-white/50 mt-0.5">
                     Stream your screen live or record project audits directly from your browser. No OBS or third-party software required.
@@ -1579,7 +2183,7 @@ export default function LivestreamPage() {
                         <ScreenShare className="w-5 h-5" />
                       </div>
                       <h3 className="text-sm font-bold text-[#0D1B2A] dark:text-white">
-                        1-Click In-Browser Live Record & Broadcast
+                        1-Click In-Browser Live Record &amp; Broadcast
                       </h3>
                       <p className="text-xs text-[#2F3E46]/80 dark:text-white/60 leading-relaxed">
                         Share your screen directly through Chrome. Streams real-time video to viewers in the live lobby with zero latency, and saves to the Replay Library when you stop.
@@ -1726,68 +2330,161 @@ export default function LivestreamPage() {
                     )}
                   </div>
 
-                  {/* Method 2: Drag and Drop Video Upload */}
+                  {/* Method 2: Drag and Drop Video Upload & Live Broadcast */}
                   <div className="p-5 rounded-2xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5 flex flex-col justify-between space-y-4">
                     <div className="space-y-2">
-                      <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-500">
-                        <Upload className="w-5 h-5" />
+                      <div className="flex items-center justify-between">
+                        <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center text-blue-500">
+                          <Radio className="w-5 h-5" />
+                        </div>
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
+                          Broadcast &amp; VOD
+                        </span>
                       </div>
                       <h3 className="text-sm font-bold text-[#0D1B2A] dark:text-white">
-                        Upload Recorded Video Check
+                        Livestream Recorded Video Check
                       </h3>
                       <p className="text-xs text-[#2F3E46]/80 dark:text-white/60 leading-relaxed">
-                        Already have an audit recording file (.mp4, .webm)? Upload it directly to the Replay Library to make it available to all labelers.
+                        Have an audit recording (.mp4, .webm)? Broadcast it live to labelers in the Live Check room with real-time sync, and choose whether to save it to the Replay Library.
                       </p>
                     </div>
 
-                    <form onSubmit={handleManualUpload} className="space-y-3">
-                      <label className="w-full py-2 px-3 bg-black/10 dark:bg-white/10 hover:bg-black/15 dark:hover:bg-white/15 text-[#0D1B2A] dark:text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-center">
-                        <Upload className="w-3.5 h-3.5" />
-                        {uploadFile ? uploadFile.name : "Select Video File (.mp4 / .webm)"}
-                        <input
-                          type="file"
-                          accept="video/*"
-                          className="hidden"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (file) {
-                              setUploadFile(file);
-                              setUploadTitle(file.name.replace(/\.[^/.]+$/, ""));
-                            }
-                          }}
-                        />
-                      </label>
-
-                      {uploadFile && (
-                        <div className="space-y-2">
+                    <div className="space-y-3">
+                      {!uploadFile ? (
+                        /* File Selector */
+                        <label className="w-full py-6 px-4 bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 rounded-2xl border-2 border-dashed border-black/15 dark:border-white/15 hover:border-emerald-500/40 text-[#0D1B2A] dark:text-white text-xs font-semibold transition-all cursor-pointer flex flex-col items-center justify-center gap-2 text-center group">
+                          <div className="w-10 h-10 rounded-xl bg-black/5 dark:bg-white/10 flex items-center justify-center text-[#2F3E46]/60 dark:text-white/60 group-hover:scale-110 group-hover:text-emerald-500 transition-all">
+                            <Upload className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <span className="font-bold text-emerald-600 dark:text-[#55f761]">Click to select video file</span>
+                            <span className="text-[#2F3E46]/60 dark:text-white/50 block text-[11px] mt-0.5">Supports MP4, WebM, MOV</span>
+                          </div>
                           <input
-                            type="text"
-                            value={uploadTitle}
-                            onChange={(e) => setUploadTitle(e.target.value)}
-                            placeholder="Video Title"
-                            className="w-full px-3 py-1.5 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 text-xs text-[#0D1B2A] dark:text-white"
+                            type="file"
+                            accept="video/*"
+                            className="hidden"
+                            onChange={handleFileSelected}
                           />
-                          <select
-                            value={uploadProjectType}
-                            onChange={(e) => setUploadProjectType(e.target.value)}
-                            className="w-full px-3 py-1.5 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 text-xs text-[#0D1B2A] dark:text-white"
-                          >
-                            <option value="Standard Building" className="text-black">Standard Building</option>
-                            <option value="Transportation" className="text-black">Transportation</option>
-                            <option value="Land Cover" className="text-black">Land Cover</option>
-                            <option value="Guidelines" className="text-black">Guidelines</option>
-                          </select>
+                        </label>
+                      ) : (
+                        /* Selected File Details & Broadcast Configuration */
+                        <div className="space-y-3">
+                          {/* Selected File Card */}
+                          <div className="p-3 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2.5 truncate">
+                              <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-500 flex items-center justify-center shrink-0">
+                                <Film className="w-4 h-4" />
+                              </div>
+                              <div className="truncate">
+                                <p className="text-xs font-bold text-[#0D1B2A] dark:text-white truncate">
+                                  {uploadFile.name}
+                                </p>
+                                <p className="text-[10px] text-[#2F3E46]/60 dark:text-white/50">
+                                  {(uploadFile.size / (1024 * 1024)).toFixed(1)} MB
+                                  {videoDuration > 0 && ` • ${formatTimer(videoDuration)}`}
+                                </p>
+                              </div>
+                            </div>
+
+                            <label className="text-[11px] text-blue-600 dark:text-blue-400 hover:underline cursor-pointer shrink-0 font-medium">
+                              Change
+                              <input
+                                type="file"
+                                accept="video/*"
+                                className="hidden"
+                                onChange={handleFileSelected}
+                              />
+                            </label>
+                          </div>
+
+                          {/* Inputs */}
+                          <div className="space-y-2">
+                            <div>
+                              <label className="text-[10px] font-semibold text-[#0D1B2A] dark:text-white block mb-0.5">
+                                Video Check Title
+                              </label>
+                              <input
+                                type="text"
+                                value={uploadTitle}
+                                onChange={(e) => setUploadTitle(e.target.value)}
+                                placeholder="Audit Session Title"
+                                className="w-full px-3 py-1.5 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 text-xs text-[#0D1B2A] dark:text-white focus:outline-none focus:ring-1 focus:ring-[#55f761]"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="text-[10px] font-semibold text-[#0D1B2A] dark:text-white block mb-0.5">
+                                Category
+                              </label>
+                              <select
+                                value={uploadProjectType}
+                                onChange={(e) => setUploadProjectType(e.target.value)}
+                                className="w-full px-3 py-1.5 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 text-xs text-[#0D1B2A] dark:text-white focus:outline-none focus:ring-1 focus:ring-[#55f761]"
+                              >
+                                <option value="Standard Building" className="text-black">Standard Building</option>
+                                <option value="Transportation" className="text-black">Transportation &amp; Roads</option>
+                                <option value="Land Cover" className="text-black">Land Cover</option>
+                                <option value="Guidelines" className="text-black">Guidelines &amp; Common Mistakes</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="text-[10px] font-semibold text-[#0D1B2A] dark:text-white block mb-0.5">
+                                Notes (Optional)
+                              </label>
+                              <input
+                                type="text"
+                                value={uploadNotes}
+                                onChange={(e) => setUploadNotes(e.target.value)}
+                                placeholder="Key points or audit mistakes demonstrated..."
+                                className="w-full px-3 py-1.5 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 text-xs text-[#0D1B2A] dark:text-white focus:outline-none focus:ring-1 focus:ring-[#55f761]"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Save to Library Checkbox / Toggle */}
+                          <label className="flex items-start gap-2.5 p-2.5 rounded-xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5 cursor-pointer hover:bg-black/10 dark:hover:bg-white/10 transition-colors">
+                            <input
+                              type="checkbox"
+                              checked={saveToLibraryAfterStream}
+                              onChange={(e) => setSaveToLibraryAfterStream(e.target.checked)}
+                              className="mt-0.5 w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 accent-[#1F7A1F] dark:accent-[#55f761] cursor-pointer"
+                            />
+                            <div className="text-[11px] leading-snug">
+                              <span className="font-bold text-[#0D1B2A] dark:text-white block">
+                                Save to Replay Library after livestream
+                              </span>
+                              <span className="text-[#2F3E46]/70 dark:text-white/50 text-[10px]">
+                                {saveToLibraryAfterStream
+                                  ? "Will prompt to save in the permanent library once the livestream concludes."
+                                  : "Livestream only — will not be saved to the permanent library."}
+                              </span>
+                            </div>
+                          </label>
+
+                          {/* Primary Broadcast Button */}
                           <button
-                            type="submit"
-                            disabled={isUploading}
-                            className="w-full py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2"
+                            type="button"
+                            onClick={startVideoBroadcast}
+                            className="w-full py-2.5 px-4 bg-[#1F7A1F] dark:bg-[#55f761] hover:scale-101 active:scale-99 text-white dark:text-[#060D14] rounded-xl text-xs font-bold shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
                           >
-                            {isUploading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-                            {isUploading ? "Uploading..." : "Publish to Library"}
+                            <Radio className="w-4 h-4" />
+                            Start Live Broadcast &amp; Stream Video
+                          </button>
+
+                          {/* Direct Upload fallback */}
+                          <button
+                            type="button"
+                            onClick={handleManualUpload}
+                            disabled={isUploading}
+                            className="w-full text-center text-[11px] text-[#2F3E46]/60 dark:text-white/50 hover:text-[#0D1B2A] dark:hover:text-white underline cursor-pointer transition-colors pt-1"
+                          >
+                            {isUploading ? "Uploading..." : "Or upload directly to Replay Library without livestreaming"}
                           </button>
                         </div>
                       )}
-                    </form>
+                    </div>
                   </div>
                 </div>
               </div>

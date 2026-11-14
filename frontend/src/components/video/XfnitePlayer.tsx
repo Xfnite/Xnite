@@ -46,7 +46,9 @@ export default function XfnitePlayer({
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [bufferedPercent, setBufferedPercent] = useState(0);
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const stallTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const qualities = ["Auto (1080p)", "1080p (FHD)", "720p (HD)", "360p (Data Saver)"];
   const speeds = [0.75, 1, 1.25, 1.5, 2];
@@ -76,6 +78,12 @@ export default function XfnitePlayer({
     setIsPlaying(false);
 
     const handleTimeUpdate = () => setCurrentTime(video.currentTime);
+    const handleProgress = () => {
+      if (video.buffered.length > 0 && video.duration > 0) {
+        const end = video.buffered.end(video.buffered.length - 1);
+        setBufferedPercent(Math.min(100, Math.round((end / video.duration) * 100)));
+      }
+    };
     const handleLoadedMetadata = () => {
       if (isFinite(video.duration) && video.duration > 0) {
         setDuration(video.duration);
@@ -90,21 +98,52 @@ export default function XfnitePlayer({
       setIsLoading(false);
       setHasError(false);
     };
-    const handleCanPlay = () => setIsLoading(false);
-    const handleWaiting = () => setIsLoading(true);
+    const handleCanPlay = () => {
+      setIsLoading(false);
+      if (stallTimeoutRef.current) {
+        clearTimeout(stallTimeoutRef.current);
+        stallTimeoutRef.current = null;
+      }
+    };
+    const handleWaiting = () => {
+      setIsLoading(true);
+      // Auto-recover from stalls on flaky connections: nudge if buffer hangs for > 3.5s
+      if (stallTimeoutRef.current) clearTimeout(stallTimeoutRef.current);
+      stallTimeoutRef.current = setTimeout(() => {
+        if (video && !video.paused && video.readyState < 3) {
+          try {
+            video.currentTime = video.currentTime + 0.05;
+          } catch {}
+        }
+      }, 3500);
+    };
     const handlePlaying = () => {
       setIsPlaying(true);
       setIsLoading(false);
       setHasError(false);
+      if (stallTimeoutRef.current) {
+        clearTimeout(stallTimeoutRef.current);
+        stallTimeoutRef.current = null;
+      }
     };
     const handlePlay = () => setIsPlaying(true);
-    const handlePause = () => setIsPlaying(false);
+    const handlePause = () => {
+      setIsPlaying(false);
+      if (stallTimeoutRef.current) {
+        clearTimeout(stallTimeoutRef.current);
+        stallTimeoutRef.current = null;
+      }
+    };
     const handleEnded = () => setIsPlaying(false);
 
     const handleError = () => {
       setIsLoading(false);
       setIsPlaying(false);
       setHasError(true);
+      if (stallTimeoutRef.current) {
+        clearTimeout(stallTimeoutRef.current);
+        stallTimeoutRef.current = null;
+      }
       const mediaErr = video.error;
       if (mediaErr?.code === 4) {
         setErrorMessage("Video recording not found or format unsupported (404).");
@@ -118,6 +157,7 @@ export default function XfnitePlayer({
     };
 
     video.addEventListener("timeupdate", handleTimeUpdate);
+    video.addEventListener("progress", handleProgress);
     video.addEventListener("loadedmetadata", handleLoadedMetadata);
     video.addEventListener("canplay", handleCanPlay);
     video.addEventListener("waiting", handleWaiting);
@@ -144,7 +184,12 @@ export default function XfnitePlayer({
     }
 
     return () => {
+      if (stallTimeoutRef.current) {
+        clearTimeout(stallTimeoutRef.current);
+        stallTimeoutRef.current = null;
+      }
       video.removeEventListener("timeupdate", handleTimeUpdate);
+      video.removeEventListener("progress", handleProgress);
       video.removeEventListener("loadedmetadata", handleLoadedMetadata);
       video.removeEventListener("canplay", handleCanPlay);
       video.removeEventListener("waiting", handleWaiting);
@@ -245,6 +290,7 @@ export default function XfnitePlayer({
         ref={videoRef}
         src={src}
         poster={poster}
+        preload="metadata"
         onClick={togglePlay}
         playsInline
         className="w-full h-full object-contain cursor-pointer"
@@ -319,8 +365,15 @@ export default function XfnitePlayer({
           showControls && !hasError ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
       >
-        {/* Scrubber Progress Bar */}
+        {/* Scrubber Progress Bar with Buffered Indicator */}
         <div className="relative w-full flex items-center group/scrubber cursor-pointer">
+          {/* Buffered Background Track */}
+          <div className="absolute inset-x-0 h-1.5 bg-white/20 rounded-lg overflow-hidden pointer-events-none">
+            <div
+              className="h-full bg-white/35 rounded-lg transition-all duration-300"
+              style={{ width: `${bufferedPercent}%` }}
+            />
+          </div>
           <input
             type="range"
             min={0}
@@ -328,7 +381,7 @@ export default function XfnitePlayer({
             value={currentTime}
             onChange={handleSeek}
             disabled={hasError || duration === 0}
-            className="w-full h-1.5 bg-white/25 rounded-lg appearance-none cursor-pointer accent-[#55f761] hover:h-2.5 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+            className="relative z-10 w-full h-1.5 bg-transparent appearance-none cursor-pointer accent-[#55f761] hover:h-2.5 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
           />
         </div>
 

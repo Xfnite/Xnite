@@ -1692,6 +1692,7 @@ io.on("connection", (socket) => {
       checkerName: socket.user?.name || "Lead Checker",
       title: data?.title || "Quality Audit Check",
       projectType: data?.projectType || "Standard Building",
+      broadcastType: data?.broadcastType || "screen",
       startedAt: new Date(),
     };
     broadcastLivestreamState(io);
