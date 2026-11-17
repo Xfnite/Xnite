@@ -12,6 +12,7 @@ import {
   Check,
   AlertTriangle,
   RotateCw,
+  RotateCcw,
   Loader2
 } from "lucide-react";
 
@@ -220,6 +221,14 @@ export default function XfnitePlayer({
     }
   };
 
+  const handleSeekRelative = (seconds: number) => {
+    if (!videoRef.current) return;
+    const dur = duration || videoRef.current.duration || 0;
+    const target = Math.max(0, Math.min(dur, videoRef.current.currentTime + seconds));
+    videoRef.current.currentTime = target;
+    setCurrentTime(target);
+  };
+
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const vol = parseFloat(e.target.value);
     setVolume(vol);
@@ -387,7 +396,19 @@ export default function XfnitePlayer({
 
         {/* Action Controls Row */}
         <div className="flex items-center justify-between text-white text-xs">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            {/* Rewind 5s */}
+            <button
+              onClick={() => handleSeekRelative(-5)}
+              disabled={hasError}
+              className="p-1 hover:text-emerald-400 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-0.5"
+              title="Rewind 5 seconds (-5s)"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-bold font-mono">5</span>
+            </button>
+
+            {/* Play/Pause */}
             <button
               onClick={togglePlay}
               disabled={hasError}
@@ -396,8 +417,19 @@ export default function XfnitePlayer({
               {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 fill-current" />}
             </button>
 
+            {/* Forward 5s */}
+            <button
+              onClick={() => handleSeekRelative(5)}
+              disabled={hasError}
+              className="p-1 hover:text-emerald-400 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-0.5"
+              title="Forward 5 seconds (+5s)"
+            >
+              <span className="text-[10px] font-bold font-mono">5</span>
+              <RotateCw className="w-3.5 h-3.5" />
+            </button>
+
             {/* Time display */}
-            <span className="font-mono text-[11px] text-white/80">
+            <span className="font-mono text-[11px] text-white/80 ml-1">
               {formatTime(currentTime)} / {formatTime(duration)}
             </span>
 

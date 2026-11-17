@@ -228,8 +228,11 @@ export async function getAvailableTeamCutoffsAction() {
     if (cutoffsResult && Array.isArray(cutoffsResult)) {
       cutoffsResult.forEach((row: any) => {
         if (row.cutoff_note && typeof row.cutoff_note === 'string') {
-          // Strip "- Projects 5391..." suffix
-          const cleanName = row.cutoff_note.split('- Projects')[0].trim();
+          // Strip "- Projects 5391..." suffix and any web / Drive URLs
+          let cleanName = row.cutoff_note.split('- Projects')[0].trim();
+          cleanName = cleanName.replace(/\s*[-–—:]*\s*https?:\/\/[^\s]+/gi, '').trim();
+          cleanName = cleanName.replace(/https?:\/\/[^\s]+/gi, '').trim();
+          cleanName = cleanName.replace(/[\s\-–—:]+$/, '').trim();
           if (cleanName) {
             uniqueCutoffs.add(cleanName);
           }

@@ -34,6 +34,8 @@ import {
   Volume2,
   VolumeX,
   Maximize,
+  RotateCcw,
+  RotateCw,
   Trash2,
   Save,
   Check,
@@ -122,10 +124,16 @@ export default function LivestreamPage() {
   // Live Screen Share & WebRTC state (Viewer & Checker)
   const [liveSession, setLiveSession] = useState<any>(null);
   const [liveViewerCount, setLiveViewerCount] = useState<number>(0);
+  const [broadcasterStream, setBroadcasterStream] = useState<MediaStream | null>(null);
   const [isViewerMuted, setIsViewerMuted] = useState(true);
   const [isMicEnabled, setIsMicEnabled] = useState(true);
   const [hasJoinedStream, setHasJoinedStream] = useState(false);
   const [isConnectingStream, setIsConnectingStream] = useState(false);
+  const [isStreamInterrupted, setIsStreamInterrupted] = useState(false);
+  const [isNetworkOffline, setIsNetworkOffline] = useState(false);
+  const hasJoinedStreamRef = useRef(false);
+  const isStreamInterruptedRef = useRef(false);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Livestream Queue & Reservation State
   const [broadcastQueue, setBroadcastQueue] = useState<
@@ -228,18 +236,54 @@ export default function LivestreamPage() {
   const handleJoinStream = () => {
     if (!socketRef.current) return;
     setIsConnectingStream(true);
+    setIsStreamInterrupted(false);
+    isStreamInterruptedRef.current = false;
     setHasJoinedStream(true);
+    hasJoinedStreamRef.current = true;
     socketRef.current.emit("livestream:join_room");
     toast.info("Connecting to live audit inspection...");
   };
 
+  // Reconnects live stream (e.g. after network drop, socket reconnect, or manual reload)
+  const reconnectViewerStream = (showToast = true) => {
+    if (!socketRef.current || !hasJoinedStreamRef.current) return;
+    setIsConnectingStream(true);
+    setIsStreamInterrupted(true);
+    isStreamInterruptedRef.current = true;
+
+    if (showToast) {
+      toast.info("Reconnecting live stream feed...");
+    }
+
+    if (viewerPeerConnectionRef.current) {
+      try {
+        viewerPeerConnectionRef.current.close();
+      } catch {}
+      viewerPeerConnectionRef.current = null;
+    }
+
+    remoteStreamRef.current = null;
+    if (viewerVideoRef.current) {
+      viewerVideoRef.current.srcObject = null;
+    }
+    viewerPendingCandidatesRef.current = [];
+
+    socketRef.current.emit("livestream:join_room");
+  };
+
   // Viewer leaves live stream
   const handleLeaveStream = () => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
     if (socketRef.current) {
       socketRef.current.emit("livestream:leave_room");
     }
     if (viewerPeerConnectionRef.current) {
-      viewerPeerConnectionRef.current.close();
+      try {
+        viewerPeerConnectionRef.current.close();
+      } catch {}
       viewerPeerConnectionRef.current = null;
     }
     viewerPendingCandidatesRef.current = [];
@@ -248,7 +292,10 @@ export default function LivestreamPage() {
       viewerVideoRef.current.srcObject = null;
     }
     setHasJoinedStream(false);
+    hasJoinedStreamRef.current = false;
     setIsConnectingStream(false);
+    setIsStreamInterrupted(false);
+    isStreamInterruptedRef.current = false;
     toast.info("Left live stream.");
   };
 
@@ -266,31 +313,40 @@ export default function LivestreamPage() {
     socketRef.current.emit("livestream:queue_leave");
   };
 
-  // Automatically disconnect from live stream if viewer switches away from "live" tab
+  // Automatically disconnect from live stream if viewer switches away from "live" tab (broadcasters stay connected)
   useEffect(() => {
-    if (activeTab !== "live" && hasJoinedStream) {
+    if (activeTab !== "live" && hasJoinedStream && !isCapturing) {
       handleLeaveStream();
     }
-  }, [activeTab]);
+  }, [activeTab, hasJoinedStream, isCapturing]);
 
-  // Viewer low-latency buffer catchup: guarantees viewers stay locked to the real-time live edge
+  // Browser network status listeners to handle lost internet and automatic reconnection
   useEffect(() => {
-    if (!hasJoinedStream) return;
-    const interval = setInterval(() => {
-      const v = viewerVideoRef.current;
-      if (v && !v.paused && v.buffered.length > 0) {
-        try {
-          const bufferEnd = v.buffered.end(v.buffered.length - 1);
-          const lag = bufferEnd - v.currentTime;
-          // If playback drifted more than 0.35s behind the real-time live edge, jump to edge
-          if (lag > 0.35) {
-            v.currentTime = bufferEnd - 0.05;
-          }
-        } catch {}
+    const handleOffline = () => {
+      setIsNetworkOffline(true);
+      if (hasJoinedStreamRef.current) {
+        setIsStreamInterrupted(true);
+        isStreamInterruptedRef.current = true;
       }
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [hasJoinedStream]);
+    };
+
+    const handleOnline = () => {
+      setIsNetworkOffline(false);
+      if (hasJoinedStreamRef.current) {
+        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = setTimeout(() => {
+          reconnectViewerStream(true);
+        }, 800);
+      }
+    };
+
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("online", handleOnline);
+    return () => {
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, []);
 
   // Setup Socket.io connection for real-time live streaming
   useEffect(() => {
@@ -303,6 +359,20 @@ export default function LivestreamPage() {
 
     socket.on("connect", () => {
       socket.emit("livestream:get_status");
+      // If the viewer was watching the stream, automatically re-join the room upon reconnect
+      if (hasJoinedStreamRef.current) {
+        console.log("[Livestream Socket] Reconnected while watching. Re-joining room...");
+        reconnectViewerStream(false);
+      }
+    });
+
+    socket.on("disconnect", (reason) => {
+      console.warn("[Livestream Socket] Connection lost:", reason);
+      if (hasJoinedStreamRef.current) {
+        setIsConnectingStream(true);
+        setIsStreamInterrupted(true);
+        isStreamInterruptedRef.current = true;
+      }
     });
 
     socket.on("connect_error", (err) => {
@@ -322,7 +392,10 @@ export default function LivestreamPage() {
         remoteStreamRef.current = null;
         if (viewerVideoRef.current) viewerVideoRef.current.srcObject = null;
         setHasJoinedStream(false);
+        hasJoinedStreamRef.current = false;
         setIsConnectingStream(false);
+        setIsStreamInterrupted(false);
+        isStreamInterruptedRef.current = false;
       }
       if (Array.isArray(queue)) {
         setBroadcastQueue(queue);
@@ -415,6 +488,14 @@ export default function LivestreamPage() {
       setLiveViewerCount((prev) => Math.max(prev + 1, peerConnectionsRef.current.size + 1));
       if (!mediaStreamRef.current) return;
 
+      // Close and delete any existing PC for this viewer socket ID (reconnecting viewer)
+      const existingPc = peerConnectionsRef.current.get(viewerSocketId);
+      if (existingPc) {
+        try { existingPc.close(); } catch {}
+        peerConnectionsRef.current.delete(viewerSocketId);
+      }
+      pendingCandidatesRef.current.delete(viewerSocketId);
+
       const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
       peerConnectionsRef.current.set(viewerSocketId, pc);
       pendingCandidatesRef.current.set(viewerSocketId, []);
@@ -456,8 +537,23 @@ export default function LivestreamPage() {
 
             sender.setParameters(params).catch(() => {});
           } catch {}
+
+          // Request keyframe for newly joined peer connection
+          if (typeof (sender as any).generateKeyFrame === "function") {
+            try {
+              (sender as any).generateKeyFrame();
+            } catch {}
+          }
         }
       });
+
+      // If streaming from an uploaded video element, micro-nudge playback to force immediate keyframe production
+      if (broadcastSource === "video" && broadcastVideoRef.current && !broadcastVideoRef.current.paused) {
+        try {
+          const curTime = broadcastVideoRef.current.currentTime;
+          broadcastVideoRef.current.currentTime = Math.max(0, curTime - 0.001);
+        } catch {}
+      }
 
       // Prioritize hardware-accelerated VP8 and H264 codecs
       try {
@@ -496,13 +592,26 @@ export default function LivestreamPage() {
           offerToReceiveVideo: false,
         });
 
-        // Optimize SDP: Enable Opus in-band FEC and DTX for zero audio stutter
+        // Optimize SDP: Enable Opus in-band FEC and DTX safely without duplicate fmtp
         if (offer.sdp) {
           let sdp = offer.sdp;
-          sdp = sdp.replace(
-            /a=rtpmap:(\d+) opus\/48000\/2/g,
-            "a=rtpmap:$1 opus/48000/2\r\na=fmtp:$1 minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=128000"
-          );
+          if (/a=fmtp:(\d+)/.test(sdp)) {
+            sdp = sdp.replace(
+              /a=fmtp:(\d+)(.*)/g,
+              (match, pt) => {
+                const isOpus = new RegExp(`a=rtpmap:${pt} opus/48000/2`).test(sdp);
+                if (isOpus) {
+                  return `a=fmtp:${pt} minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=128000`;
+                }
+                return match;
+              }
+            );
+          } else {
+            sdp = sdp.replace(
+              /a=rtpmap:(\d+) opus\/48000\/2/g,
+              "a=rtpmap:$1 opus/48000/2\r\na=fmtp:$1 minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=128000"
+            );
+          }
           offer = new RTCSessionDescription({ type: offer.type, sdp });
         }
 
@@ -534,32 +643,64 @@ export default function LivestreamPage() {
       // 1. Viewer receiving signal from Checker
       if (signal.sdp && signal.sdp.type === "offer") {
         if (viewerPeerConnectionRef.current) {
-          viewerPeerConnectionRef.current.close();
+          try { viewerPeerConnectionRef.current.close(); } catch {}
         }
 
         const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
         viewerPeerConnectionRef.current = pc;
-        viewerPendingCandidatesRef.current = [];
 
         pc.oniceconnectionstatechange = () => {
           console.log(`[Viewer ICE] state: ${pc.iceConnectionState}`);
-          if (pc.iceConnectionState === "connected") {
+          if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
             setIsConnectingStream(false);
-          } else if (pc.iceConnectionState === "failed" || pc.iceConnectionState === "disconnected") {
-            setIsConnectingStream(false);
+            setIsStreamInterrupted(false);
+            isStreamInterruptedRef.current = false;
+          } else if (pc.iceConnectionState === "disconnected") {
+            setIsConnectingStream(true);
+            setIsStreamInterrupted(true);
+            isStreamInterruptedRef.current = true;
+            if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+            reconnectTimeoutRef.current = setTimeout(() => {
+              if (viewerPeerConnectionRef.current?.iceConnectionState === "disconnected" && hasJoinedStreamRef.current) {
+                reconnectViewerStream(false);
+              }
+            }, 3500);
+          } else if (pc.iceConnectionState === "failed") {
+            setIsConnectingStream(true);
+            setIsStreamInterrupted(true);
+            isStreamInterruptedRef.current = true;
+            if (hasJoinedStreamRef.current) {
+              reconnectViewerStream(false);
+            }
           }
         };
 
         pc.ontrack = (event) => {
-          let stream = event.streams[0];
+          let stream = remoteStreamRef.current;
           if (!stream) {
-            stream = new MediaStream([event.track]);
+            stream = new MediaStream();
+            remoteStreamRef.current = stream;
           }
-          remoteStreamRef.current = stream;
+          if (!stream.getTracks().some((t) => t.id === event.track.id)) {
+            stream.addTrack(event.track);
+          }
           setIsConnectingStream(false);
+          setIsStreamInterrupted(false);
+          isStreamInterruptedRef.current = false;
+
           if (viewerVideoRef.current) {
-            viewerVideoRef.current.srcObject = stream;
-            viewerVideoRef.current.play().catch(() => {});
+            if (viewerVideoRef.current.srcObject !== stream) {
+              viewerVideoRef.current.srcObject = stream;
+            }
+            viewerVideoRef.current.play().catch((err) => {
+              console.warn("[Viewer Video] play() rejected (autoplay restricted):", err);
+              // Fallback: Mute the video to bypass browser autoplay restriction, so playback starts
+              if (viewerVideoRef.current) {
+                viewerVideoRef.current.muted = true;
+                setIsViewerMuted(true);
+                viewerVideoRef.current.play().catch(() => {});
+              }
+            });
           }
         };
 
@@ -574,11 +715,13 @@ export default function LivestreamPage() {
 
         await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
 
-        // Flush any candidates buffered before remoteDescription was set
-        const buffered = viewerPendingCandidatesRef.current;
+        // Flush any candidates buffered before or during remoteDescription set
+        const buffered = [...viewerPendingCandidatesRef.current];
         viewerPendingCandidatesRef.current = [];
         for (const cand of buffered) {
-          await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(cand));
+          } catch {}
         }
 
         const answer = await pc.createAnswer();
@@ -613,10 +756,10 @@ export default function LivestreamPage() {
             queue.push(signal.candidate);
             pendingCandidatesRef.current.set(senderSocketId, queue);
           }
-        } else if (viewerPeerConnectionRef.current) {
+        } else {
           // Candidate on Viewer from Checker
           const pc = viewerPeerConnectionRef.current;
-          if (pc.remoteDescription && pc.remoteDescription.type) {
+          if (pc && pc.remoteDescription && pc.remoteDescription.type) {
             await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)).catch(() => {});
           } else {
             viewerPendingCandidatesRef.current.push(signal.candidate);
@@ -630,17 +773,23 @@ export default function LivestreamPage() {
       remoteStreamRef.current = null;
       if (viewerVideoRef.current) viewerVideoRef.current.srcObject = null;
       if (viewerPeerConnectionRef.current) {
-        viewerPeerConnectionRef.current.close();
+        try { viewerPeerConnectionRef.current.close(); } catch {}
         viewerPeerConnectionRef.current = null;
       }
       setHasJoinedStream(false);
+      hasJoinedStreamRef.current = false;
       setIsConnectingStream(false);
+      setIsStreamInterrupted(false);
+      isStreamInterruptedRef.current = false;
       toast.info("The live inspection session has ended.");
     });
 
     return () => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
       if (viewerPeerConnectionRef.current) {
-        viewerPeerConnectionRef.current.close();
+        try { viewerPeerConnectionRef.current.close(); } catch {}
       }
       socket.disconnect();
     };
@@ -791,6 +940,7 @@ export default function LivestreamPage() {
       ]);
 
       mediaStreamRef.current = combinedStream;
+      setBroadcasterStream(combinedStream);
       recordedChunksRef.current = [];
 
       // Attach stream to Checker's Live Monitor Preview
@@ -889,6 +1039,7 @@ export default function LivestreamPage() {
       screenStreamRef.current = null;
       micStreamRef.current = null;
       mediaStreamRef.current = null;
+      setBroadcasterStream(null);
       mediaRecorderRef.current = null;
       if (livePreviewRef.current) livePreviewRef.current.srcObject = null;
 
@@ -979,6 +1130,7 @@ export default function LivestreamPage() {
     screenStreamRef.current = null;
     micStreamRef.current = null;
     mediaStreamRef.current = null;
+    setBroadcasterStream(null);
     mediaRecorderRef.current = null;
     if (livePreviewRef.current) livePreviewRef.current.srcObject = null;
     setIsCapturing(false);
@@ -1132,6 +1284,7 @@ export default function LivestreamPage() {
         ]);
 
         mediaStreamRef.current = combinedStream;
+        setBroadcasterStream(combinedStream);
 
         const broadcastTitle = sessionTitle || uploadTitle || uploadFile?.name || "Quality Audit Check";
         const broadcastType = sessionProjectType || uploadProjectType;
@@ -1155,6 +1308,7 @@ export default function LivestreamPage() {
         toast.error("Failed to start video broadcast: " + (err.message || "Unknown error"));
         setIsCapturing(false);
         setBroadcastSource(null);
+        setBroadcasterStream(null);
       }
     };
 
@@ -1188,6 +1342,7 @@ export default function LivestreamPage() {
     micStreamRef.current = null;
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     mediaStreamRef.current = null;
+    setBroadcasterStream(null);
 
     if (audioContextRef.current) {
       audioContextRef.current.close().catch(() => {});
@@ -1220,6 +1375,7 @@ export default function LivestreamPage() {
     micStreamRef.current = null;
     mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
     mediaStreamRef.current = null;
+    setBroadcasterStream(null);
 
     if (audioContextRef.current) {
       audioContextRef.current.close().catch(() => {});
@@ -1313,6 +1469,47 @@ export default function LivestreamPage() {
       broadcastVideoRef.current.currentTime = newTime;
     }
   };
+
+  const handleSeekRelative = (seconds: number) => {
+    const video = broadcastVideoRef.current;
+    if (!video) return;
+    const duration = videoDuration || video.duration || 0;
+    const current = video.currentTime;
+    const target = Math.max(0, Math.min(duration, current + seconds));
+    video.currentTime = target;
+    setVideoCurrentTime(Math.round(target));
+  };
+
+  // Keyboard shortcuts for video broadcast playback: Left Arrow (-5s), Right Arrow (+5s), Space (Play/Pause)
+  useEffect(() => {
+    if (activeTab !== "studio" || !isCapturing || broadcastSource !== "video") return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement as HTMLElement | null;
+      if (
+        activeEl &&
+        (activeEl.tagName === "INPUT" ||
+          activeEl.tagName === "TEXTAREA" ||
+          activeEl.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        handleSeekRelative(-5);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        handleSeekRelative(5);
+      } else if (e.key === " " || e.key === "Spacebar") {
+        e.preventDefault();
+        toggleVideoPlayPause();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeTab, isCapturing, broadcastSource, videoDuration]);
 
   const toggleMonitorAudio = () => {
     setIsMonitorAudioMuted((prev) => {
@@ -1466,14 +1663,52 @@ export default function LivestreamPage() {
         </section>
 
         {/* Tab 1: Live Stream Player */}
-        {activeTab === "live" && (
-          <div className="space-y-4 max-w-5xl mx-auto">
-            {/* Main Live Player Column */}
-            <div className="space-y-4">
-                <div className="relative aspect-video w-full bg-black rounded-2xl overflow-hidden shadow-2xl border border-black/10 dark:border-white/10 group flex items-center justify-center">
-                  {/* Mode A: Real-Time WebRTC In-Browser Stream when a Checker is LIVE */}
-                  {liveSession ? (
-                    hasJoinedStream ? (
+        <div className={activeTab === "live" ? "space-y-4 max-w-5xl mx-auto" : "hidden"}>
+          {/* Main Live Player Column */}
+          <div className="space-y-4">
+              <div className="relative aspect-video w-full bg-black rounded-2xl overflow-hidden shadow-2xl border border-black/10 dark:border-white/10 group flex items-center justify-center">
+                {/* Mode A: Real-Time WebRTC In-Browser Stream when a Checker is LIVE */}
+                {liveSession ? (
+                  isCapturing ? (
+                    <div className="relative w-full h-full bg-black flex items-center justify-center">
+                      <video
+                        ref={(el) => {
+                          if (el) {
+                            el.muted = true;
+                            el.defaultMuted = true;
+                            const stream = broadcasterStream || mediaStreamRef.current;
+                            if (stream && el.srcObject !== stream) {
+                              el.srcObject = stream;
+                              el.play().catch(() => {});
+                            }
+                          }
+                        }}
+                        autoPlay
+                        playsInline
+                        muted
+                        className="w-full h-full object-contain"
+                      />
+                      <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/90 text-white text-xs font-bold uppercase tracking-wider shadow-lg">
+                        <span className="w-2 h-2 rounded-full bg-white animate-ping" />
+                        {broadcastSource === "video" ? "LIVE VIDEO AUDIT (YOUR FEED)" : "LIVE SCREEN SHARE (YOUR FEED)"}
+                      </div>
+
+                      <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
+                        <button
+                          onClick={() => setActiveTab("studio")}
+                          className="px-3 py-1.5 rounded-xl bg-[#1F7A1F] dark:bg-[#55f761] hover:scale-105 active:scale-95 text-white dark:text-[#060D14] text-xs font-bold flex items-center gap-1.5 shadow-lg transition-all cursor-pointer backdrop-blur-md"
+                        >
+                          <ScreenShare className="w-3.5 h-3.5" />
+                          Return to Studio Controls
+                        </button>
+                      </div>
+
+                      <div className="absolute bottom-4 left-4 z-30 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-black/70 backdrop-blur-md text-white text-xs border border-white/10">
+                        <Users className="w-3.5 h-3.5 text-[#55f761]" />
+                        <span>{liveViewerCount} {liveViewerCount === 1 ? "viewer" : "viewers"} watching your live check</span>
+                      </div>
+                    </div>
+                  ) : hasJoinedStream ? (
                       <div className="relative w-full h-full bg-black flex items-center justify-center">
                         <video
                           ref={(el) => {
@@ -1520,16 +1755,11 @@ export default function LivestreamPage() {
                             <Maximize className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => {
-                              if (socketRef.current) {
-                                socketRef.current.emit("livestream:join_room");
-                                toast.info("Reconnecting live stream feed...");
-                              }
-                            }}
+                            onClick={() => reconnectViewerStream(true)}
                             className="px-3 py-1.5 rounded-xl bg-black/70 hover:bg-black/90 text-white text-xs font-semibold flex items-center gap-1.5 border border-white/20 transition-all cursor-pointer backdrop-blur-md"
-                            title="Click if stream is buffering or frozen"
+                            title="Click if stream is buffering, frozen, or interrupted"
                           >
-                            <RefreshCw className="w-3.5 h-3.5" />
+                            <RefreshCw className={`w-3.5 h-3.5 ${isConnectingStream ? "animate-spin" : ""}`} />
                             Reload
                           </button>
                           <button
@@ -1542,11 +1772,31 @@ export default function LivestreamPage() {
                           </button>
                         </div>
 
-                        {/* Connecting Overlay */}
-                        {isConnectingStream && !remoteStreamRef.current && (
-                          <div className="absolute inset-0 bg-black/75 backdrop-blur-xs flex flex-col items-center justify-center gap-3 z-20">
+                        {/* Connecting / Reconnecting Overlay */}
+                        {(isConnectingStream || isStreamInterrupted) && (
+                          <div className="absolute inset-0 bg-black/80 backdrop-blur-xs flex flex-col items-center justify-center gap-3 z-20 p-4 text-center">
                             <RefreshCw className="w-8 h-8 animate-spin text-[#55f761]" />
-                            <p className="text-white text-xs font-semibold">Connecting to checker's broadcast...</p>
+                            <div className="space-y-1">
+                              <p className="text-white text-sm font-semibold">
+                                {isNetworkOffline
+                                  ? "Internet Connection Lost"
+                                  : isStreamInterrupted
+                                  ? "Reconnecting to live broadcast..."
+                                  : "Connecting to checker's broadcast..."}
+                              </p>
+                              <p className="text-white/60 text-xs max-w-xs">
+                                {isNetworkOffline
+                                  ? "Playback will automatically resume once your network is restored."
+                                  : "Re-establishing real-time audio and video feed."}
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => reconnectViewerStream(true)}
+                              className="mt-1 px-4 py-2 rounded-xl bg-[#1F7A1F] dark:bg-[#55f761] hover:scale-105 active:scale-95 text-white dark:text-[#060D14] text-xs font-bold transition-all cursor-pointer shadow-lg flex items-center gap-1.5"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              Reconnect Now
+                            </button>
                           </div>
                         )}
 
@@ -1646,11 +1896,9 @@ export default function LivestreamPage() {
                 </div>
               </div>
           </div>
-        )}
 
         {/* Tab 2: VOD Library */}
-        {activeTab === "vod" && (
-          <div className="space-y-6">
+        <div className={activeTab === "vod" ? "space-y-6" : "hidden"}>
             {/* Active Video Player (if selected) */}
             {selectedRecording && (
               <div className="space-y-3 bg-white/70 dark:bg-[#060D14]/70 backdrop-blur-md rounded-2xl border border-black/5 dark:border-white/10 p-4">
@@ -1802,11 +2050,18 @@ export default function LivestreamPage() {
               </div>
             )}
           </div>
-        )}
 
         {/* Tab 3: Checker Studio (Only for Staff/Checkers) */}
-        {activeTab === "studio" && isUserStaff && (
-          <div className="space-y-6">
+        {isUserStaff && (
+          <div
+            className={
+              activeTab === "studio"
+                ? "space-y-6"
+                : isCapturing
+                ? "fixed -top-[99999px] -left-[99999px] w-[640px] h-[360px] pointer-events-none opacity-0 overflow-hidden z-[-999]"
+                : "hidden"
+            }
+          >
             {/* If Screen Share or Video Broadcast is Active -> Show Full Studio Recorder */}
             {isCapturing ? (
               <div className="bg-white/80 dark:bg-[#060D14]/80 backdrop-blur-md rounded-2xl border-2 border-emerald-500/40 p-6 space-y-6 shadow-2xl">
@@ -1929,13 +2184,37 @@ export default function LivestreamPage() {
 
                     {/* Video Scrubber Controls for Video Broadcast */}
                     {broadcastSource === "video" && (
-                      <div className="p-3 bg-black/5 dark:bg-white/5 rounded-xl border border-black/5 dark:border-white/5 flex items-center gap-3">
+                      <div className="p-3 bg-black/5 dark:bg-white/5 rounded-xl border border-black/5 dark:border-white/5 flex items-center gap-2.5">
+                        {/* Previous 5s (Rewind) */}
                         <button
+                          type="button"
+                          onClick={() => handleSeekRelative(-5)}
+                          className="px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-[#0D1B2A] dark:text-white hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0 flex items-center gap-1 border border-black/5 dark:border-white/10"
+                          title="Rewind 5 seconds (-5s) [Left Arrow]"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          <span className="text-[11px] font-bold font-mono">-5s</span>
+                        </button>
+
+                        {/* Play / Pause Toggle */}
+                        <button
+                          type="button"
                           onClick={toggleVideoPlayPause}
-                          className="p-2 rounded-lg bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0"
-                          title={isVideoPaused ? "Play" : "Pause"}
+                          className="p-2 rounded-lg bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0 shadow-sm"
+                          title={isVideoPaused ? "Play [Space]" : "Pause [Space]"}
                         >
                           {isVideoPaused ? <Play className="w-4 h-4 fill-current ml-0.5" /> : <Pause className="w-4 h-4 fill-current" />}
+                        </button>
+
+                        {/* Next 5s (Forward) */}
+                        <button
+                          type="button"
+                          onClick={() => handleSeekRelative(5)}
+                          className="px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-[#0D1B2A] dark:text-white hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0 flex items-center gap-1 border border-black/5 dark:border-white/10"
+                          title="Forward 5 seconds (+5s) [Right Arrow]"
+                        >
+                          <span className="text-[11px] font-bold font-mono">+5s</span>
+                          <RotateCw className="w-3.5 h-3.5" />
                         </button>
 
                         <span className="font-mono text-xs text-[#0D1B2A] dark:text-white shrink-0">
