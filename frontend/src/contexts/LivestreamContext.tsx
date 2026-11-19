@@ -407,6 +407,10 @@ export function LivestreamProvider({
   // Viewer Joins Stream
   const handleJoinStream = () => {
     if (!socketRef.current) return;
+    if (isCapturing) {
+      toast.info("You are currently broadcasting in Checker Studio.");
+      return;
+    }
     setIsConnectingStream(true);
     setIsStreamInterrupted(false);
     isStreamInterruptedRef.current = false;
@@ -444,7 +448,7 @@ export function LivestreamProvider({
 
   // Reconnect Viewer Stream (e.g. after network drop)
   const reconnectViewerStream = useCallback((showToast = true) => {
-    if (!socketRef.current || !hasJoinedStreamRef.current) return;
+    if (!socketRef.current || !hasJoinedStreamRef.current || isCapturingRef.current) return;
     setIsConnectingStream(true);
     setIsStreamInterrupted(true);
     isStreamInterruptedRef.current = true;

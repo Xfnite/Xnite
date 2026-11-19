@@ -246,6 +246,13 @@ export default function LivestreamPage() {
       : null;
   }, [effectiveUser]);
 
+  // Keep broadcaster in Studio view while capturing
+  useEffect(() => {
+    if (isCapturing && activeTab === "live") {
+      setActiveTab("studio");
+    }
+  }, [isCapturing, activeTab]);
+
   useEffect(() => {
     isChatCollapsedRef.current = isChatCollapsed;
   }, [isChatCollapsed]);
@@ -867,18 +874,20 @@ export default function LivestreamPage() {
 
           {/* Navigation Pill Tabs */}
           <div className="flex items-center gap-1 p-1 bg-black/5 dark:bg-[#1B263B]/60 rounded-xl border border-black/5 dark:border-white/5">
-            <button
-              onClick={() => setActiveTab("live")}
-              className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                activeTab === "live"
-                  ? "bg-white dark:bg-[#060D14] text-[#1F7A1F] dark:text-[#55f761] shadow-sm"
-                  : "text-[#2F3E46]/70 dark:text-white/60 hover:text-[#0D1B2A] dark:hover:text-white"
-              }`}
-            >
-              <Radio className={`w-3.5 h-3.5 ${liveSession ? "text-red-500 animate-pulse" : ""}`} />
-              Live Check
-              {liveSession && <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />}
-            </button>
+            {!isCapturing && (
+              <button
+                onClick={() => setActiveTab("live")}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                  activeTab === "live"
+                    ? "bg-white dark:bg-[#060D14] text-[#1F7A1F] dark:text-[#55f761] shadow-sm"
+                    : "text-[#2F3E46]/70 dark:text-white/60 hover:text-[#0D1B2A] dark:hover:text-white"
+                }`}
+              >
+                <Radio className={`w-3.5 h-3.5 ${liveSession ? "text-red-500 animate-pulse" : ""}`} />
+                Live Check
+                {liveSession && <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />}
+              </button>
+            )}
             <button
               onClick={() => {
                 setActiveTab("vod");
@@ -899,11 +908,13 @@ export default function LivestreamPage() {
                 className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   activeTab === "studio"
                     ? "bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] shadow-sm font-bold"
+                    : isCapturing
+                    ? "bg-red-500/15 text-red-600 dark:text-red-400 font-bold border border-red-500/30"
                     : "text-[#2F3E46]/70 dark:text-white/60 hover:text-[#0D1B2A] dark:hover:text-white"
                 }`}
               >
                 <ScreenShare className="w-3.5 h-3.5" />
-                Checker Studio
+                {isCapturing ? "Studio (Live 🔴)" : "Checker Studio"}
                 {isCapturing && <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />}
               </button>
             )}

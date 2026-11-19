@@ -2137,6 +2137,7 @@ io.on("connection", (socket) => {
     if (
       activeLivestreamSession &&
       activeLivestreamSession.checkerSocketId &&
+      activeLivestreamSession.checkerSocketId !== socket.id &&
       activeLivestreamSession.broadcastType !== "replay"
     ) {
       io.to(activeLivestreamSession.checkerSocketId).emit("livestream:viewer_joined", {
