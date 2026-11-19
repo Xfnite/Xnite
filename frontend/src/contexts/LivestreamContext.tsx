@@ -1098,18 +1098,29 @@ export function LivestreamProvider({
         };
 
         pc.ontrack = (event) => {
+          console.log(`[Viewer ontrack] Received track: kind=${event.track.kind}, id=${event.track.id}`);
           let stream = remoteStreamRef.current;
           if (!stream) {
             stream = new MediaStream();
-            remoteStreamRef.current = stream;
           }
           if (!stream.getTracks().some((t) => t.id === event.track.id)) {
             stream.addTrack(event.track);
           }
-          setRemoteStream(stream);
+          const freshStream = new MediaStream(stream.getTracks());
+          remoteStreamRef.current = freshStream;
+          setRemoteStream(freshStream);
           setIsConnectingStream(false);
           setIsStreamInterrupted(false);
           isStreamInterruptedRef.current = false;
+
+          event.track.onunmute = () => {
+            console.log(`[Viewer track onunmute] kind=${event.track.kind}`);
+            if (remoteStreamRef.current) {
+              const updated = new MediaStream(remoteStreamRef.current.getTracks());
+              remoteStreamRef.current = updated;
+              setRemoteStream(updated);
+            }
+          };
         };
 
         pc.onicecandidate = (event) => {

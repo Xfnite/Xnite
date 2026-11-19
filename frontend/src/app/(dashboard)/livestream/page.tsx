@@ -724,6 +724,28 @@ export default function LivestreamPage() {
     return () => clearTimeout(timer);
   }, [isReplayBroadcastActive, liveSession, hasJoinedStream, isViewerMuted]);
 
+  // Dynamically attach remote WebRTC stream to viewer video element as incoming tracks resolve
+  useEffect(() => {
+    const video = viewerVideoRef.current;
+    if (video && remoteStream) {
+      if (video.srcObject !== remoteStream) {
+        video.srcObject = remoteStream;
+      }
+      video.play().catch(() => {
+        video.muted = true;
+        setIsViewerMuted(true);
+        video.play().catch(() => {});
+      });
+    }
+  }, [remoteStream, activeTab, hasJoinedStream]);
+
+  // Keep viewer video mute state synced
+  useEffect(() => {
+    if (viewerVideoRef.current) {
+      viewerVideoRef.current.muted = isViewerMuted;
+    }
+  }, [isViewerMuted]);
+
   const openReplayBroadcastModal = (recording: ReplayRecordingItem, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (!recording?.videoUrl) {
