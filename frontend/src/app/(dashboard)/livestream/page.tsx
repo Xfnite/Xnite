@@ -93,6 +93,7 @@ function getCookie(name: string): string | null {
 export default function LivestreamPage() {
   const {
     currentUser,
+    setCurrentUser,
     liveSession,
     liveViewerCount,
     broadcastQueue,
@@ -216,17 +217,34 @@ export default function LivestreamPage() {
   const livePreviewRef = useRef<HTMLVideoElement>(null);
   const socketRef = useRef<Socket | null>(null);
 
+  const [localUser, setLocalUser] = useState<any>(null);
+
   useEffect(() => {
-    currentUserRef.current = currentUser
+    if (!currentUser?.role) {
+      getSessionUser()
+        .then((u) => {
+          if (u) {
+            setLocalUser(u);
+            if (setCurrentUser) setCurrentUser(u);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [currentUser?.role, setCurrentUser]);
+
+  const effectiveUser = currentUser?.role ? currentUser : (localUser || currentUser);
+
+  useEffect(() => {
+    currentUserRef.current = effectiveUser
       ? {
-          name: currentUser.name || "Member",
-          email: currentUser.email || "",
-          role: currentUser.role || "",
-          firstName: currentUser.firstName,
-          lastName: currentUser.lastName,
+          name: effectiveUser.name || "Member",
+          email: effectiveUser.email || "",
+          role: effectiveUser.role || "",
+          firstName: effectiveUser.firstName,
+          lastName: effectiveUser.lastName,
         }
       : null;
-  }, [currentUser]);
+  }, [effectiveUser]);
 
   useEffect(() => {
     isChatCollapsedRef.current = isChatCollapsed;
@@ -453,10 +471,10 @@ export default function LivestreamPage() {
   };
 
   const canDeleteRecording = (recording?: any) => {
-    if (!recording || !currentUser) return false;
-    const userEmail = (currentUser.email || "").trim().toLowerCase();
+    if (!recording || !effectiveUser) return false;
+    const userEmail = (effectiveUser.email || "").trim().toLowerCase();
     const checkerEmail = (recording.checkerEmail || "").trim().toLowerCase();
-    const userRole = (currentUser.role || "").trim().toLowerCase();
+    const userRole = (effectiveUser.role || "").trim().toLowerCase();
     return (checkerEmail && userEmail === checkerEmail) || userRole === "admin";
   };
 
@@ -582,11 +600,11 @@ export default function LivestreamPage() {
     const optimistic: LivestreamChatMessage = {
       id: tempId,
       chatType: LIVESTREAM_CHAT_TYPE,
-      sender: currentUser?.name || currentUser?.email || "You",
-      senderEmail: currentUser?.email || null,
-      senderRole: normalizeSenderRole(currentUser?.role),
-      senderFirstName: currentUser?.firstName || null,
-      senderLastName: currentUser?.lastName || null,
+      sender: effectiveUser?.name || effectiveUser?.email || "You",
+      senderEmail: effectiveUser?.email || null,
+      senderRole: normalizeSenderRole(effectiveUser?.role),
+      senderFirstName: effectiveUser?.firstName || null,
+      senderLastName: effectiveUser?.lastName || null,
       text,
       createdAt: new Date(),
       replyToId: replyTo ? replyTo.id : null,
@@ -638,17 +656,17 @@ export default function LivestreamPage() {
     });
   };
 
-  const isUserStaff = isStaff(currentUser?.role);
+  const isUserStaff = isStaff(effectiveUser?.role);
   const isReplayBroadcastActive = Boolean(
     !isCapturing && liveSession?.broadcastType === "replay" && liveSession?.replayVideoUrl
   );
   const canManageLiveReplay = Boolean(
     liveSession?.broadcastType === "replay" &&
-      currentUser &&
+      effectiveUser &&
       ((liveSession.checkerEmail &&
-        currentUser.email &&
-        liveSession.checkerEmail.trim().toLowerCase() === currentUser.email.trim().toLowerCase()) ||
-        (currentUser.role || "").trim().toLowerCase() === "admin")
+        effectiveUser.email &&
+        liveSession.checkerEmail.trim().toLowerCase() === effectiveUser.email.trim().toLowerCase()) ||
+        (effectiveUser.role || "").trim().toLowerCase() === "admin")
   );
 
   // Track room presence automatically when watching a live Replay Broadcast
@@ -815,7 +833,7 @@ export default function LivestreamPage() {
     (isCapturing
       ? {
           title: sessionTitle || "Live Quality Audit Inspection",
-          checkerName: currentUser?.name || "You",
+          checkerName: effectiveUser?.name || "You",
           projectType: sessionProjectType || "Standard Building",
           broadcastType: broadcastSource || "screen",
         }
@@ -1488,7 +1506,7 @@ export default function LivestreamPage() {
             >
               <LivestreamChat
                 messages={chatMessages}
-                currentUser={currentUser}
+                currentUser={effectiveUser}
                 isConnected={isSocketConnected}
                 isLive={Boolean(liveSession || isCapturing)}
                 presenceCount={chatPresenceCount}
@@ -2009,7 +2027,7 @@ export default function LivestreamPage() {
                     <div className="h-[440px] lg:h-full lg:absolute lg:inset-0">
                       <LivestreamChat
                         messages={chatMessages}
-                        currentUser={currentUser}
+                        currentUser={effectiveUser}
                         isConnected={isSocketConnected}
                         isLive={Boolean(liveSession || isCapturing)}
                         presenceCount={chatPresenceCount}
@@ -2287,7 +2305,7 @@ export default function LivestreamPage() {
                         </div>
                         <div className="space-y-1.5 max-h-28 overflow-y-auto pr-1">
                           {broadcastQueue.map((item, idx) => {
-                            const isMe = currentUser?.email?.toLowerCase() === item.email?.toLowerCase();
+                            const isMe = effectiveUser?.email?.toLowerCase() === item.email?.toLowerCase();
                             return (
                               <div
                                 key={item.email + idx}

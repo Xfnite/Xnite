@@ -345,7 +345,7 @@ export default function DashboardLayout({
   // recreating it, so its data fetch (getLoyaltyData) starts as soon as the
   // session is known and is never reset when the rest of the layout unblocks.
   return (
-    <LivestreamProvider initialUser={{ email: userEmail, role: userRole, name: userName }}>
+    <LivestreamProvider initialUser={userEmail ? { email: userEmail, role: userRole, name: userName } : undefined}>
       {isAuthChecking ? (
         <div className="min-h-screen flex items-center justify-center bg-[#E0E1DD] dark:bg-[#060D14]">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#0D1B2A] dark:border-[#E0E1DD]"></div>

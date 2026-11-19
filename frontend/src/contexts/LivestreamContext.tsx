@@ -73,6 +73,7 @@ const ICE_SERVERS: RTCIceServer[] = [
 export interface LivestreamContextType {
   // Current User
   currentUser: any;
+  setCurrentUser: React.Dispatch<React.SetStateAction<any>>;
 
   // Session & Queue Info
   liveSession: any;
@@ -189,7 +190,19 @@ export function LivestreamProvider({
   children: ReactNode;
   initialUser?: any;
 }) {
-  const [currentUser, setCurrentUser] = useState<any>(initialUser || null);
+  const [currentUser, setCurrentUser] = useState<any>(
+    initialUser?.email ? initialUser : null
+  );
+
+  // Sync initialUser if updated from parent (layout.tsx)
+  useEffect(() => {
+    if (initialUser && initialUser.email) {
+      setCurrentUser((prev: any) => ({
+        ...(prev || {}),
+        ...initialUser,
+      }));
+    }
+  }, [initialUser?.email, initialUser?.role, initialUser?.name]);
 
   // Live Screen Share & WebRTC state (Viewer & Checker)
   const [liveSession, setLiveSession] = useState<any>(null);
@@ -334,14 +347,19 @@ export function LivestreamProvider({
 
   // Keep user populated
   useEffect(() => {
-    if (!currentUser) {
+    if (!currentUser || !currentUser.email || !currentUser.role) {
       getSessionUser()
         .then((user) => {
-          if (user) setCurrentUser(user);
+          if (user) {
+            setCurrentUser((prev: any) => ({
+              ...(prev || {}),
+              ...user,
+            }));
+          }
         })
         .catch(() => {});
     }
-  }, [currentUser]);
+  }, [currentUser?.email, currentUser?.role]);
 
   // Viewer Audio Controls
   const unmuteViewer = () => {
@@ -1866,6 +1884,7 @@ export function LivestreamProvider({
 
   const contextValue: LivestreamContextType = {
     currentUser,
+    setCurrentUser,
     liveSession,
     liveViewerCount,
     broadcastQueue,
