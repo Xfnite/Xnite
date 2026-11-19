@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { verifySessionToken } from "@/lib/jwt";
 import { uploadVideoToR2 } from "@/lib/r2";
-import { prisma, pool } from "@/lib/db";
+import { prisma } from "@/lib/db";
 import { isStaff } from "@/config/permissions";
 
 export const runtime = "nodejs";
@@ -36,11 +36,11 @@ export async function POST(req: NextRequest) {
     const file = formData.get("file") as File | null;
     const title = (formData.get("title") as string) || "Quality Audit Check";
     const projectType = (formData.get("projectType") as string) || "Standard Building";
-    const durationSec = parseInt((formData.get("durationSec") as string) || "0", 10);
+    const durationSec = Math.max(0, Math.round(Number(formData.get("durationSec")) || 0));
     const description = (formData.get("description") as string) || "";
 
-    if (!file) {
-      return NextResponse.json({ success: false, error: "No video file provided" }, { status: 400 });
+    if (!file || file.size === 0) {
+      return NextResponse.json({ success: false, error: "No video file provided or recording is empty" }, { status: 400 });
     }
 
     const arrayBuffer = await file.arrayBuffer();
@@ -52,45 +52,24 @@ export async function POST(req: NextRequest) {
     }
 
     // Save to database
-    let recording: any;
-    if ((prisma as any).checkRecording) {
-      recording = await (prisma as any).checkRecording.create({
-        data: {
-          title,
-          projectType,
-          description: description || null,
-          checkerEmail: user.email,
-          checkerName: user.name || user.email.split("@")[0],
-          videoUrl: uploadRes.url,
-          durationSec,
-          qualities: ["1080p", "720p", "360p"],
-        },
-      });
-    } else {
-      const insertQuery = `
-        INSERT INTO "CheckRecording" 
-          ("id", "title", "projectType", "description", "checkerEmail", "checkerName", "videoUrl", "durationSec", "qualities", "createdAt", "updatedAt")
-        VALUES 
-          (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
-        RETURNING *;
-      `;
-      const dbRes = await pool.query(insertQuery, [
+    const recording = await prisma.checkRecording.create({
+      data: {
         title,
         projectType,
-        description || null,
-        user.email,
-        user.name || user.email.split("@")[0],
-        uploadRes.url,
+        description: description || null,
+        checkerEmail: user.email,
+        checkerName: user.name || user.email.split("@")[0],
+        videoUrl: uploadRes.url,
         durationSec,
-        ["1080p", "720p", "360p"],
-      ]);
-      recording = dbRes.rows[0];
-    }
+        qualities: ["1080p", "720p", "360p"],
+      },
+    });
 
     return NextResponse.json({ success: true, recording });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Failed to process video upload";
     console.error("[Livestream Upload API] Error:", error);
-    return NextResponse.json({ success: false, error: error.message || "Failed to process video upload" }, { status: 500 });
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }
 

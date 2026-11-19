@@ -76,5 +76,19 @@ scripts/test_*
 # Uploaded test/local media
 frontend/public/uploads/
 public/uploads/
+/Screenshot/
 
 
+.agents/rules/graphify.md
+.agents/skills/daily-logs/SKILL.md
+.agents/workflows/check.md
+.agents/workflows/daily-logs.md
+.agents/workflows/fix-bug.md
+.agents/workflows/new-feature.md
+.agents/workflows/save-memory.md
+.obsidian/app.json
+.obsidian/appearance.json
+.obsidian/core-plugins.json
+.obsidian/graph.json
+.obsidian/workspace.json
+AGENTS.md

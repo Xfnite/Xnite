@@ -155,7 +155,7 @@ export async function uploadVideoToR2(
 
     // If R2 credentials are configured, upload to Cloudflare R2
     if (R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_ENDPOINT) {
-      const bucket = process.env.R2_STREAM_BUCKET || "streams";
+      const bucket = process.env.R2_STREAM_BUCKET || R2_BUCKET_NAME;
       const command = new PutObjectCommand({
         Bucket: bucket,
         Key: key,
@@ -166,11 +166,14 @@ export async function uploadVideoToR2(
 
       await s3Client.send(command);
 
-      const publicDomain =
+      const publicDomain = (
         process.env.R2_STREAM_DOMAIN ||
         process.env.NEXT_PUBLIC_R2_STREAM_DOMAIN ||
-        "https://streams.xfnite.cloud";
-      const publicUrl = `${publicDomain.replace(/\/+$/, "")}/${key}`;
+        R2_PUBLIC_URL
+      ).replace(/\/+$/, "");
+      const publicUrl = publicDomain
+        ? `${publicDomain}/${key}`
+        : `${R2_ENDPOINT}/${bucket}/${key}`;
       return { success: true, url: publicUrl };
     }
 
@@ -185,7 +188,7 @@ export async function uploadVideoToR2(
     await fs.writeFile(localFilePath, fileBuffer);
 
     return { success: true, url: `/uploads/recordings/${localFilename}` };
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[uploadVideoToR2] Failed to upload video:", error);
     return { success: false, error: toUserFacingError(error, "Failed to upload video recording.") };
   }

@@ -8,6 +8,7 @@ import { getSystemSetting } from "@/app/actions/settings";
 import { getUserSidebarBanner, updateUserSidebarBanner, getLabelerRecruitCount, getInnerCouncilAccessAction } from "@/app/actions/user";
 import { GATES, isStaff, isOldLabeler, isApplicant, canEarnInnerCouncil } from "@/config/permissions";
 import { isDemoGingerEmail } from "@/lib/demoAccount";
+import { DEFAULT_SIDEBAR_BANNER_URL, normalizeBannerEmbedUrl } from "@/lib/bannerUrl";
 
 interface SidebarProps {
   isOpen?: boolean;
@@ -70,7 +71,7 @@ export default function Sidebar({
   const [hasVisitedProjects, setHasVisitedProjects] = useState(false);
   const [showFacebookModal, setShowFacebookModal] = useState(false);
   const [hasVisitedChat, setHasVisitedChat] = useState(false);
-  const [bannerUrl, setBannerUrl] = useState("https://www.youtube.com/embed/NyzgdXyta4k?autoplay=1&mute=1&loop=1&playlist=NyzgdXyta4k&controls=0&showinfo=0&rel=0&disablekb=1&modestbranding=1&iv_load_policy=3&enablejsapi=1");
+  const [bannerUrl, setBannerUrl] = useState(DEFAULT_SIDEBAR_BANNER_URL);
   const [showBannerModal, setShowBannerModal] = useState(false);
   const [tempBannerInput, setTempBannerInput] = useState("");
   const [isUpdatingBanner, setIsUpdatingBanner] = useState(false);
@@ -79,6 +80,7 @@ export default function Sidebar({
   const [showReferModal, setShowReferModal] = useState(false);
   const [recruitCount, setRecruitCount] = useState<number | null>(null);
   const [isLoadingRecruit, setIsLoadingRecruit] = useState(false);
+  const [isLivestreamActive, setIsLivestreamActive] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const isAtLeastTwoMonthsOld = () => {
@@ -94,24 +96,23 @@ export default function Sidebar({
     if (typeof window !== "undefined") {
       getUserSidebarBanner().then((res) => {
         if (res.success && res.url) {
-          let savedBanner = res.url;
-
-          const match = savedBanner.match(/embed\/([^?]+)/);
-          if (match) {
-            const vid = match[1];
-            if (!savedBanner.includes("loop=1")) savedBanner += "&loop=1";
-            if (!savedBanner.includes("playlist=")) savedBanner += `&playlist=${vid}`;
-          }
-
-          if (!savedBanner.includes("mute=1")) savedBanner += "&mute=1";
-          if (!savedBanner.includes("iv_load_policy=3")) savedBanner += "&iv_load_policy=3";
-          if (!savedBanner.includes("enablejsapi=1")) savedBanner += "&enablejsapi=1";
-          setBannerUrl(savedBanner);
+          setBannerUrl(normalizeBannerEmbedUrl(res.url));
         }
       });
     }
     getSystemSetting("messenger_link_sidebar", "").then(setMessengerLink);
   }, [role]);
+
+  useEffect(() => {
+    const handleLivestreamStatus = (e: Event) => {
+      const detail = (e as CustomEvent<{ isLive?: boolean }>).detail;
+      if (typeof detail?.isLive === "boolean") {
+        setIsLivestreamActive(detail.isLive);
+      }
+    };
+    window.addEventListener("livestream_status_changed", handleLivestreamStatus);
+    return () => window.removeEventListener("livestream_status_changed", handleLivestreamStatus);
+  }, []);
 
   // Labelers / old labelers earn the Inner Council link through their passer count
   const [innerCouncilAccess, setInnerCouncilAccess] = useState(false);
@@ -556,13 +557,18 @@ export default function Sidebar({
             <Link
               href="/livestream"
               onClick={onClose}
-              className={`flex items-center px-4 py-2.5 text-sm font-medium transition-colors rounded-tr-xl rounded-bl-xl ${pathname === "/livestream" || pathname.startsWith("/livestream/")
-                ? "bg-black/5 dark:bg-[#1B263B] text-[#1F7A1F] dark:text-[#E0E1DD] shadow-sm"
-                : "text-[#2F3E46] dark:text-[#E0E1DD]/70 hover:bg-black/5 dark:hover:bg-[#1B263B]/50 hover:text-[#0D1B2A] dark:hover:text-[#E0E1DD]"
-                }`}
+              className={`flex items-center px-4 py-2.5 text-sm font-medium transition-all rounded-tr-xl rounded-bl-xl ${
+                isLivestreamActive
+                  ? pathname === "/livestream" || pathname.startsWith("/livestream/")
+                    ? "bg-[#1F7A1F]/15 dark:bg-[#55f761]/15 text-[#1F7A1F] dark:text-[#55f761] border border-[#1F7A1F]/35 dark:border-[#55f761]/35 shadow-sm font-semibold"
+                    : "bg-[#1F7A1F]/10 dark:bg-[#55f761]/10 text-[#1F7A1F] dark:text-[#55f761] border border-[#1F7A1F]/25 dark:border-[#55f761]/25 hover:bg-[#1F7A1F]/15 dark:hover:bg-[#55f761]/15 shadow-sm font-semibold"
+                  : pathname === "/livestream" || pathname.startsWith("/livestream/")
+                    ? "bg-black/5 dark:bg-[#1B263B] text-[#1F7A1F] dark:text-[#E0E1DD] shadow-sm"
+                    : "text-[#2F3E46] dark:text-[#E0E1DD]/70 hover:bg-black/5 dark:hover:bg-[#1B263B]/50 hover:text-[#0D1B2A] dark:hover:text-[#E0E1DD]"
+              }`}
             >
               <svg
-                className="w-4 h-4 mr-2.5 flex-shrink-0"
+                className={`w-4 h-4 mr-2.5 flex-shrink-0 ${isLivestreamActive ? "text-[#1F7A1F] dark:text-[#55f761] animate-pulse" : ""}`}
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="2"
@@ -574,7 +580,13 @@ export default function Sidebar({
                   d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"
                 />
               </svg>
-              Livestream
+              <span>Livestream</span>
+              {isLivestreamActive && (
+                <span className="ml-auto flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] text-[9px] font-black uppercase tracking-wider shadow-sm">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white dark:bg-[#060D14] animate-ping" />
+                  Live
+                </span>
+              )}
             </Link>
           )}
 
@@ -1055,6 +1067,7 @@ export default function Sidebar({
                     const res = await updateUserSidebarBanner(embedUrl);
                     if (res.success) {
                       setBannerUrl(embedUrl);
+                      window.dispatchEvent(new CustomEvent("sidebar_banner_updated", { detail: { url: embedUrl } }));
                       setShowBannerModal(false);
                       toast.success("Banner updated successfully!");
                     } else {

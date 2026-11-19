@@ -314,7 +314,21 @@ function hasDisallowedDomain(text) {
   });
 }
 
-const VALID_CHAT_TYPES = ["applicants", "passers", "old", "checker", "judger", "inner-council"];
+const LIVESTREAM_CHAT_TYPE = "livestream-chat";
+const LIVESTREAM_CHAT_MAX_MESSAGES = 500;
+const LIVESTREAM_CHAT_PRUNE_EVERY = 25;
+let livestreamChatSendCounter = 0;
+let isPruningLivestreamChat = false;
+
+const VALID_CHAT_TYPES = [
+  "applicants",
+  "passers",
+  "old",
+  "checker",
+  "judger",
+  "inner-council",
+  LIVESTREAM_CHAT_TYPE,
+];
 
 function isValidChatType(chatType) {
   if (VALID_CHAT_TYPES.includes(chatType)) return true;
@@ -334,7 +348,7 @@ function isValidChatType(chatType) {
 // Single source of truth for room access, used by both join_room and
 // send_message so a client can't bypass the lock by skipping join_room.
 async function canAccessRoom(socket, chatType) {
-  if (chatType === "applicants") return true;
+  if (chatType === "applicants" || chatType === LIVESTREAM_CHAT_TYPE) return true;
 
   const role = socket.user.role?.trim()?.toLowerCase() || "";
   const isOldLabeler = role === "old-labeler" || role === "old-laber" || role === "old labeler";
@@ -397,9 +411,107 @@ let jukeboxListeners = new Set(); // tracks socket IDs actively listening
 const jukeboxLastAddedTimes = new Map();
 const activeConnections = new Map(); // tracks unique users by email
 const activeChatWidgetConnections = new Map(); // tracks unique users by email with chat open
-let activeLivestreamSession = null; // tracks active live check session for real-time screen sharing
+let activeLivestreamSession = null; // tracks active live check session for real-time screen sharing & replay broadcasts
+let livestreamReplayEndTimer = null; // auto-ends replay broadcasts after maxLoops finish
 let livestreamBroadcastQueue = []; // [{ socketId, email, name, role, queuedAt }]
 let livestreamActiveReservation = null; // { socketId, email, name, role, expiresAt, timer }
+
+function clearLivestreamReplayTimer() {
+  if (livestreamReplayEndTimer) {
+    clearTimeout(livestreamReplayEndTimer);
+    livestreamReplayEndTimer = null;
+  }
+}
+
+function endActiveLivestreamSession(ioInstance) {
+  clearLivestreamReplayTimer();
+  activeLivestreamSession = null;
+  ioInstance.to("room:livestream").emit("livestream:ended");
+  advanceLivestreamQueue(ioInstance);
+}
+
+function scheduleLivestreamReplayEndTimer(ioInstance, session) {
+  clearLivestreamReplayTimer();
+  if (!session || session.broadcastType !== "replay") return;
+  const durSec = Number(session.replayDurationSec || 0);
+  const maxLoops = Math.max(1, Math.min(50, Number(session.maxLoops || 1)));
+  if (durSec <= 0) return;
+
+  const startedMs = new Date(session.startedAt).getTime();
+  // Small cushion so the client's final `ended` event fires first when browser tab is open
+  const endAtMs = startedMs + durSec * maxLoops * 1000 + 2000;
+  const delayMs = Math.max(500, endAtMs - Date.now());
+  const sessionId = session.sessionId;
+
+  livestreamReplayEndTimer = setTimeout(() => {
+    if (
+      activeLivestreamSession &&
+      activeLivestreamSession.broadcastType === "replay" &&
+      activeLivestreamSession.sessionId === sessionId
+    ) {
+      console.log(`[livestream] Replay session ${sessionId} reached max loops (${maxLoops}) — auto-ending.`);
+      endActiveLivestreamSession(ioInstance);
+    }
+  }, delayMs);
+}
+
+function claimLivestreamSlot(socket, ioInstance) {
+  const userEmail = (socket.user?.email || "").trim().toLowerCase();
+
+  // 1. Enforce single-stream broadcast: Only one checker can stream at a time
+  if (activeLivestreamSession) {
+    const activeEmail = (activeLivestreamSession.checkerEmail || "").trim().toLowerCase();
+    const isSameBroadcaster =
+      activeLivestreamSession.checkerSocketId === socket.id ||
+      (userEmail && activeEmail && userEmail === activeEmail);
+
+    if (!isSameBroadcaster) {
+      const currentCheckerSocket = ioInstance.sockets.sockets.get(activeLivestreamSession.checkerSocketId);
+      if (
+        activeLivestreamSession.broadcastType === "replay" ||
+        (currentCheckerSocket && currentCheckerSocket.connected)
+      ) {
+        socket.emit("livestream:checker_busy", {
+          message: `Checker "${activeLivestreamSession.checkerName}" is currently live. Only one audit broadcast can be active at a time.`,
+          session: activeLivestreamSession,
+        });
+        return false;
+      }
+    }
+  }
+
+  // 2. Enforce queue reservation: If slot is reserved for someone else
+  if (
+    livestreamActiveReservation &&
+    Date.now() < livestreamActiveReservation.expiresAt &&
+    livestreamActiveReservation.email.trim().toLowerCase() !== userEmail &&
+    livestreamActiveReservation.socketId !== socket.id
+  ) {
+    socket.emit("livestream:checker_busy", {
+      message: `Broadcast slot is currently reserved for ${livestreamActiveReservation.name} (next in queue).`,
+      session: activeLivestreamSession,
+      reservedChecker: livestreamActiveReservation,
+    });
+    return false;
+  }
+
+  // Clear active reservation if it belonged to this checker
+  if (
+    livestreamActiveReservation &&
+    (livestreamActiveReservation.email.trim().toLowerCase() === userEmail ||
+      livestreamActiveReservation.socketId === socket.id)
+  ) {
+    if (livestreamActiveReservation.timer) clearTimeout(livestreamActiveReservation.timer);
+    livestreamActiveReservation = null;
+  }
+
+  // Remove user from broadcast queue if they were queued
+  livestreamBroadcastQueue = livestreamBroadcastQueue.filter(
+    (item) => item.socketId !== socket.id && (!userEmail || item.email.trim().toLowerCase() !== userEmail)
+  );
+
+  return true;
+}
 
 function getPublicLivestreamState() {
   return {
@@ -432,6 +544,65 @@ function broadcastLivestreamViewerCount(ioInstance) {
   ioInstance.to("room:livestream").emit("livestream:viewer_count", roomSize);
   if (activeLivestreamSession && activeLivestreamSession.checkerSocketId) {
     ioInstance.to(activeLivestreamSession.checkerSocketId).emit("livestream:viewer_count", roomSize);
+  }
+}
+
+const livestreamChatSockets = new Set();
+
+function broadcastLivestreamChatPresence(ioInstance) {
+  const room = ioInstance.sockets.adapter.rooms.get(`room:${LIVESTREAM_CHAT_TYPE}`);
+  if (!room || room.size === 0) {
+    ioInstance.to(`room:${LIVESTREAM_CHAT_TYPE}`).emit("livestream_chat:presence", 0);
+    return;
+  }
+  const uniqueEmails = new Set();
+  for (const sid of room) {
+    const s = ioInstance.sockets.sockets.get(sid);
+    if (s?.user?.email) {
+      uniqueEmails.add(s.user.email.toLowerCase());
+    } else if (s) {
+      uniqueEmails.add(sid);
+    }
+  }
+  ioInstance.to(`room:${LIVESTREAM_CHAT_TYPE}`).emit("livestream_chat:presence", uniqueEmails.size);
+}
+
+// Scalable history pruning for high-volume livestream chat: retains at most
+// LIVESTREAM_CHAT_MAX_MESSAGES rows in PostgreSQL using the (chatType, createdAt)
+// index, deleting overflow in bounded batches so the table never bloats.
+async function pruneLivestreamChatHistory() {
+  if (isPruningLivestreamChat) return;
+  isPruningLivestreamChat = true;
+  try {
+    let totalDeleted = 0;
+    while (true) {
+      const overflow = await prisma.chatMessage.findMany({
+        where: { chatType: LIVESTREAM_CHAT_TYPE },
+        orderBy: { createdAt: "desc" },
+        skip: LIVESTREAM_CHAT_MAX_MESSAGES,
+        take: 500,
+        select: { id: true },
+      });
+
+      if (overflow.length === 0) break;
+
+      const deleted = await prisma.chatMessage.deleteMany({
+        where: { id: { in: overflow.map((m) => m.id) } },
+      });
+      totalDeleted += deleted.count;
+
+      if (overflow.length < 500) break;
+    }
+
+    if (totalDeleted > 0) {
+      console.log(
+        `[Cleanup] Pruned ${totalDeleted} ${LIVESTREAM_CHAT_TYPE} message(s) beyond cap (${LIVESTREAM_CHAT_MAX_MESSAGES}).`
+      );
+    }
+  } catch (err) {
+    console.error("[Cleanup] Livestream chat pruning error:", err);
+  } finally {
+    isPruningLivestreamChat = false;
   }
 }
 
@@ -1277,6 +1448,10 @@ io.on("connection", (socket) => {
     // Leave previous room of the same type if any (a client is typically in one active tab)
     // For simplicity, just join the room
     socket.join(roomName);
+    if (chatType === LIVESTREAM_CHAT_TYPE) {
+      livestreamChatSockets.add(socket.id);
+      broadcastLivestreamChatPresence(io);
+    }
   });
 
   // Handle fetching room history on-demand
@@ -1365,6 +1540,10 @@ io.on("connection", (socket) => {
       if (hasDisallowedDomain(text) && !isJudgerOrAdmin) {
         return;
       }
+
+      if (chatType === LIVESTREAM_CHAT_TYPE && text.trim().length > 500) {
+        return socket.emit("error_message", "Message is too long (max 500 characters).");
+      }
     }
 
     if (!isValidChatType(chatType) || !(await canAccessRoom(socket, chatType))) {
@@ -1452,18 +1631,25 @@ io.on("connection", (socket) => {
       // Broadcast to all sockets in the room
       io.to(`room:${chatType}`).emit("new_message", { chatType, message: messageWithNames });
 
-      // Pass the Torch: award LXP for helping a lower-role player via reply.
-      // Fire-and-forget so it never blocks or fails the message send.
-      if (replyToId) {
-        awardTorchPoint(socket, io, replyToId, message.id).catch((err) =>
-          console.error("Torch award error:", err)
-        );
-      }
+      // Pass the Torch & FAQ Archive apply to lounge/group chats, not rapid livestream chatter.
+      if (chatType !== LIVESTREAM_CHAT_TYPE) {
+        if (replyToId) {
+          awardTorchPoint(socket, io, replyToId, message.id).catch((err) =>
+            console.error("Torch award error:", err)
+          );
+        }
 
-      // Permanent FAQ Collection: Archive questions & replies exempt from 30-day deletion
-      archiveFaqMessage(message, replyToId).catch((err) =>
-        console.error("FAQ archive error:", err)
-      );
+        // Permanent FAQ Collection: Archive questions & replies exempt from 30-day deletion
+        archiveFaqMessage(message, replyToId).catch((err) =>
+          console.error("FAQ archive error:", err)
+        );
+      } else {
+        livestreamChatSendCounter++;
+        if (livestreamChatSendCounter >= LIVESTREAM_CHAT_PRUNE_EVERY) {
+          livestreamChatSendCounter = 0;
+          pruneLivestreamChatHistory().catch(() => {});
+        }
+      }
     } catch (err) {
       console.error("Send message error:", err);
       socket.emit("error_message", "Failed to send message");
@@ -1492,11 +1678,19 @@ io.on("connection", (socket) => {
         return socket.emit("error_message", "Message not found");
       }
 
+      const targetChatType = message.chatType || chatType;
       const isAdmin = socket.user.role?.toLowerCase() === "admin";
-      const isOwner = message.sender === socket.user.name || message.sender === socket.user.email;
+      const isOwner =
+        message.sender === socket.user.name ||
+        message.sender === socket.user.email ||
+        (message.senderEmail && socket.user.email && message.senderEmail.toLowerCase() === socket.user.email.toLowerCase());
 
       if (!isOwner && !isAdmin) {
         return socket.emit("error_message", "Unauthorized to edit this message");
+      }
+
+      if (targetChatType === LIVESTREAM_CHAT_TYPE && newText.trim().length > 500) {
+        return socket.emit("error_message", "Message is too long (max 500 characters).");
       }
 
       // Update Database
@@ -1516,7 +1710,7 @@ io.on("connection", (socket) => {
 
       // Update Redis Cache
       if (isRedisReady()) {
-        const cacheKey = `chat_messages:${chatType}`;
+        const cacheKey = `chat_messages:${targetChatType}`;
         try {
           const cached = await redis.lrange(cacheKey, 0, -1);
           if (cached && cached.length > 0) {
@@ -1539,7 +1733,7 @@ io.on("connection", (socket) => {
       }
 
       // Broadcast update
-      io.to(`room:${chatType}`).emit("message_edited", { chatType, message: messageWithNames });
+      io.to(`room:${targetChatType}`).emit("message_edited", { chatType: targetChatType, message: messageWithNames });
     } catch (err) {
       console.error("Edit message error:", err);
       socket.emit("error_message", "Failed to edit message");
@@ -1557,15 +1751,20 @@ io.on("connection", (socket) => {
         return socket.emit("error_message", "Message not found");
       }
 
+      const targetChatType = message.chatType || chatType;
       const cleanRole = socket.user.role?.trim()?.toLowerCase() || "";
       const isAdminOrJudger = cleanRole === "admin" || cleanRole === "judger";
-      const isOwner = message.sender === socket.user.name || message.sender === socket.user.email;
+      const canForceDelete = isAdminOrJudger || (targetChatType === LIVESTREAM_CHAT_TYPE && cleanRole === "checker");
+      const isOwner =
+        message.sender === socket.user.name ||
+        message.sender === socket.user.email ||
+        (message.senderEmail && socket.user.email && message.senderEmail.toLowerCase() === socket.user.email.toLowerCase());
 
-      if (!isOwner && !isAdminOrJudger) {
+      if (!isOwner && !canForceDelete) {
         return socket.emit("error_message", "Unauthorized to delete this message");
       }
 
-      if (forceDelete && isAdminOrJudger) {
+      if (forceDelete && canForceDelete) {
         // Delete completely from database!
         await prisma.chatMessage.delete({
           where: { id: messageId }
@@ -1573,7 +1772,7 @@ io.on("connection", (socket) => {
 
         // Invalidate Redis Cache completely
         if (isRedisReady()) {
-          const cacheKey = `chat_messages:${chatType}`;
+          const cacheKey = `chat_messages:${targetChatType}`;
           try {
             await redis.del(cacheKey);
             await redis.del(`${cacheKey}:empty`);
@@ -1583,7 +1782,7 @@ io.on("connection", (socket) => {
         }
 
         // Broadcast removal
-        io.to(`room:${chatType}`).emit("message_removed", { chatType, messageId });
+        io.to(`room:${targetChatType}`).emit("message_removed", { chatType: targetChatType, messageId });
       } else {
         // Update Database to "Message unsent"
         const updatedMessage = await prisma.chatMessage.update({
@@ -1601,7 +1800,7 @@ io.on("connection", (socket) => {
 
         // Update Redis Cache
         if (isRedisReady()) {
-          const cacheKey = `chat_messages:${chatType}`;
+          const cacheKey = `chat_messages:${targetChatType}`;
           try {
             const cached = await redis.lrange(cacheKey, 0, -1);
             if (cached && cached.length > 0) {
@@ -1624,11 +1823,47 @@ io.on("connection", (socket) => {
         }
 
         // Broadcast update
-        io.to(`room:${chatType}`).emit("message_deleted", { chatType, message: messageWithNames });
+        io.to(`room:${targetChatType}`).emit("message_deleted", { chatType: targetChatType, message: messageWithNames });
       }
     } catch (err) {
       console.error("Delete message error:", err);
       socket.emit("error_message", "Failed to delete message");
+    }
+  });
+
+  // Clear livestream chat history (Staff/Checkers/Judgers/Admin only)
+  socket.on("clear_livestream_chat", async () => {
+    try {
+      const dbUser = await prisma.user.findUnique({
+        where: { email: socket.user.email.toLowerCase() },
+        select: { role: true, name: true },
+      });
+      const cleanRole = (dbUser?.role || socket.user.role || "").trim().toLowerCase();
+      if (!["admin", "judger", "checker"].includes(cleanRole)) {
+        return socket.emit("error_message", "Only Checkers, Judgers, or Admins can clear stream chat.");
+      }
+
+      await prisma.chatMessage.deleteMany({
+        where: { chatType: LIVESTREAM_CHAT_TYPE },
+      });
+
+      if (isRedisReady()) {
+        const cacheKey = `chat_messages:${LIVESTREAM_CHAT_TYPE}`;
+        try {
+          await redis.del(cacheKey);
+          await redis.set(`${cacheKey}:empty`, "true", "EX", 10);
+        } catch (err) {
+          console.error("Redis clear livestream chat error:", err);
+        }
+      }
+
+      io.to(`room:${LIVESTREAM_CHAT_TYPE}`).emit("livestream_chat_cleared", {
+        clearedBy: dbUser?.name || socket.user.name || "Moderator",
+        clearedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("Clear livestream chat error:", err);
+      socket.emit("error_message", "Failed to clear stream chat.");
     }
   });
 
@@ -1645,48 +1880,11 @@ io.on("connection", (socket) => {
 
   // --- Livestream & Real-Time Screen Share Signaling ---
   socket.on("livestream:checker_start", (data) => {
-    // 1. Enforce single-stream broadcast: Only one checker can stream at a time
-    if (activeLivestreamSession && activeLivestreamSession.checkerSocketId !== socket.id) {
-      const currentCheckerSocket = io.sockets.sockets.get(activeLivestreamSession.checkerSocketId);
-      if (currentCheckerSocket && currentCheckerSocket.connected) {
-        socket.emit("livestream:checker_busy", {
-          message: `Checker "${activeLivestreamSession.checkerName}" is currently live. Only one audit broadcast can be active at a time.`,
-          session: activeLivestreamSession,
-        });
-        return;
-      }
-    }
-
-    // 2. Enforce queue reservation: If slot is reserved for someone else
-    if (
-      livestreamActiveReservation &&
-      Date.now() < livestreamActiveReservation.expiresAt &&
-      livestreamActiveReservation.email !== (socket.user?.email || "") &&
-      livestreamActiveReservation.socketId !== socket.id
-    ) {
-      socket.emit("livestream:checker_busy", {
-        message: `Broadcast slot is currently reserved for ${livestreamActiveReservation.name} (next in queue).`,
-        session: activeLivestreamSession,
-        reservedChecker: livestreamActiveReservation,
-      });
-      return;
-    }
-
-    // Clear active reservation if it belonged to this checker
-    if (
-      livestreamActiveReservation &&
-      (livestreamActiveReservation.email === (socket.user?.email || "") || livestreamActiveReservation.socketId === socket.id)
-    ) {
-      if (livestreamActiveReservation.timer) clearTimeout(livestreamActiveReservation.timer);
-      livestreamActiveReservation = null;
-    }
-
-    // Remove user from broadcast queue if they were queued
-    livestreamBroadcastQueue = livestreamBroadcastQueue.filter(
-      (item) => item.socketId !== socket.id && (!socket.user?.email || item.email !== socket.user.email)
-    );
+    if (!claimLivestreamSlot(socket, io)) return;
+    clearLivestreamReplayTimer();
 
     activeLivestreamSession = {
+      sessionId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       checkerSocketId: socket.id,
       checkerEmail: socket.user?.email || "checker",
       checkerName: socket.user?.name || "Lead Checker",
@@ -1698,6 +1896,114 @@ io.on("connection", (socket) => {
     broadcastLivestreamState(io);
     socket.to("room:livestream").emit("livestream:stream_available");
     broadcastLivestreamViewerCount(io);
+  });
+
+  // Start a Replay Library video as a synced looping Live broadcast
+  socket.on("livestream:replay_start", async (data) => {
+    const userEmail = (socket.user?.email || "").trim().toLowerCase();
+    if (!userEmail) {
+      socket.emit("livestream:replay_error", { message: "Authentication required to start a live replay." });
+      return;
+    }
+
+    let role = (socket.user?.role || "").trim().toLowerCase();
+    let checkerName = socket.user?.name || "Lead Checker";
+    try {
+      const dbUser = await prisma.user.findUnique({
+        where: { email: socket.user.email },
+        select: { role: true, name: true },
+      });
+      if (dbUser?.role) role = dbUser.role.trim().toLowerCase();
+      if (dbUser?.name) checkerName = dbUser.name;
+    } catch {}
+
+    if (!["admin", "checker", "judger", "recruiter"].includes(role)) {
+      socket.emit("livestream:replay_error", { message: "Only checkers and staff can stream replays live." });
+      return;
+    }
+
+    const videoUrl = typeof data?.videoUrl === "string" ? data.videoUrl.trim() : "";
+    if (!videoUrl) {
+      socket.emit("livestream:replay_error", { message: "Selected recording does not have a playable video URL." });
+      return;
+    }
+
+    if (!claimLivestreamSlot(socket, io)) return;
+    clearLivestreamReplayTimer();
+
+    const parsedLoops = parseInt(String(data?.maxLoops ?? 1), 10);
+    const maxLoops = Number.isFinite(parsedLoops) ? Math.max(1, Math.min(50, parsedLoops)) : 1;
+    const rawDuration = Number(data?.durationSec || 0);
+    const replayDurationSec = Number.isFinite(rawDuration) && rawDuration > 0 ? rawDuration : 0;
+    const startedAt = new Date();
+    const endsAt = replayDurationSec > 0 ? new Date(startedAt.getTime() + replayDurationSec * maxLoops * 1000) : null;
+
+    activeLivestreamSession = {
+      sessionId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      checkerSocketId: socket.id,
+      checkerEmail: socket.user.email,
+      checkerName,
+      title: (typeof data?.title === "string" && data.title.trim()) ? data.title.trim() : "Replay Audit Stream",
+      projectType: data?.projectType || "Standard Building",
+      broadcastType: "replay",
+      replayRecordingId: data?.recordingId || null,
+      replayVideoUrl: videoUrl,
+      replayDurationSec,
+      maxLoops,
+      startedAt,
+      endsAt,
+    };
+
+    scheduleLivestreamReplayEndTimer(io, activeLivestreamSession);
+    broadcastLivestreamState(io);
+    socket.emit("livestream:replay_started", { session: activeLivestreamSession });
+    socket.to("room:livestream").emit("livestream:stream_available");
+    broadcastLivestreamViewerCount(io);
+  });
+
+  // Backfills exact media duration from client metadata when recording had durationSec = 0
+  socket.on("livestream:replay_report_duration", ({ sessionId, durationSec }) => {
+    if (!activeLivestreamSession || activeLivestreamSession.broadcastType !== "replay") return;
+    if (sessionId && activeLivestreamSession.sessionId !== sessionId) return;
+
+    const cleanDur = Number(durationSec || 0);
+    if (!Number.isFinite(cleanDur) || cleanDur <= 0) return;
+
+    const userEmail = (socket.user?.email || "").trim().toLowerCase();
+    const isBroadcaster =
+      activeLivestreamSession.checkerSocketId === socket.id ||
+      (userEmail && userEmail === (activeLivestreamSession.checkerEmail || "").trim().toLowerCase());
+    if (!isBroadcaster && activeLivestreamSession.replayDurationSec > 0) return;
+
+    activeLivestreamSession.replayDurationSec = cleanDur;
+    activeLivestreamSession.endsAt = new Date(
+      new Date(activeLivestreamSession.startedAt).getTime() + cleanDur * activeLivestreamSession.maxLoops * 1000
+    );
+    scheduleLivestreamReplayEndTimer(io, activeLivestreamSession);
+    broadcastLivestreamState(io);
+  });
+
+  // Auto-end live replay when maxLoops completes on playback
+  socket.on("livestream:replay_completed", ({ sessionId }) => {
+    if (!activeLivestreamSession || activeLivestreamSession.broadcastType !== "replay") return;
+    if (sessionId && activeLivestreamSession.sessionId !== sessionId) return;
+
+    const userEmail = (socket.user?.email || "").trim().toLowerCase();
+    const isBroadcaster =
+      activeLivestreamSession.checkerSocketId === socket.id ||
+      (userEmail && userEmail === (activeLivestreamSession.checkerEmail || "").trim().toLowerCase());
+
+    const elapsedMs = Date.now() - new Date(activeLivestreamSession.startedAt).getTime();
+    const expectedMs =
+      activeLivestreamSession.replayDurationSec > 0
+        ? activeLivestreamSession.replayDurationSec * activeLivestreamSession.maxLoops * 1000
+        : 0;
+    const reachedExpectedEnd = expectedMs > 0 && elapsedMs >= expectedMs - 3000;
+
+    if (isBroadcaster || reachedExpectedEnd || expectedMs === 0) {
+      console.log(`[livestream] Replay session ${activeLivestreamSession.sessionId} completed all ${activeLivestreamSession.maxLoops} loop(s).`);
+      endActiveLivestreamSession(io);
+    }
   });
 
   socket.on("livestream:queue_join", () => {
@@ -1794,7 +2100,11 @@ io.on("connection", (socket) => {
   socket.on("livestream:join_room", () => {
     socket.join("room:livestream");
     broadcastLivestreamViewerCount(io);
-    if (activeLivestreamSession && activeLivestreamSession.checkerSocketId) {
+    if (
+      activeLivestreamSession &&
+      activeLivestreamSession.checkerSocketId &&
+      activeLivestreamSession.broadcastType !== "replay"
+    ) {
       io.to(activeLivestreamSession.checkerSocketId).emit("livestream:viewer_joined", {
         viewerSocketId: socket.id,
         viewerEmail: socket.user?.email,
@@ -1806,7 +2116,11 @@ io.on("connection", (socket) => {
   socket.on("livestream:leave_room", () => {
     socket.leave("room:livestream");
     broadcastLivestreamViewerCount(io);
-    if (activeLivestreamSession && activeLivestreamSession.checkerSocketId) {
+    if (
+      activeLivestreamSession &&
+      activeLivestreamSession.checkerSocketId &&
+      activeLivestreamSession.broadcastType !== "replay"
+    ) {
       io.to(activeLivestreamSession.checkerSocketId).emit("livestream:viewer_left", {
         viewerSocketId: socket.id,
       });
@@ -1821,28 +2135,47 @@ io.on("connection", (socket) => {
   });
 
   socket.on("livestream:checker_stop", () => {
-    if (activeLivestreamSession && activeLivestreamSession.checkerSocketId === socket.id) {
-      activeLivestreamSession = null;
-      io.to("room:livestream").emit("livestream:ended");
-      advanceLivestreamQueue(io);
-    } else {
-      activeLivestreamSession = null;
+    if (!activeLivestreamSession) {
+      clearLivestreamReplayTimer();
       broadcastLivestreamState(io);
+      return;
+    }
+
+    const userEmail = (socket.user?.email || "").trim().toLowerCase();
+    const userRole = (socket.user?.role || "").trim().toLowerCase();
+    const activeEmail = (activeLivestreamSession.checkerEmail || "").trim().toLowerCase();
+    const canStop =
+      activeLivestreamSession.checkerSocketId === socket.id ||
+      (userEmail && activeEmail && userEmail === activeEmail) ||
+      userRole === "admin";
+
+    if (canStop) {
+      endActiveLivestreamSession(io);
+    } else {
+      socket.emit("livestream:replay_error", {
+        message: "Only the active broadcaster can end this livestream.",
+      });
     }
   });
 
   socket.on("disconnect", () => {
-    if (activeLivestreamSession && activeLivestreamSession.checkerSocketId === socket.id) {
-      activeLivestreamSession = null;
-      io.to("room:livestream").emit("livestream:ended");
-      advanceLivestreamQueue(io);
+    if (
+      activeLivestreamSession &&
+      activeLivestreamSession.checkerSocketId === socket.id &&
+      activeLivestreamSession.broadcastType !== "replay"
+    ) {
+      endActiveLivestreamSession(io);
     } else if (
       livestreamActiveReservation &&
       livestreamActiveReservation.socketId === socket.id
     ) {
       advanceLivestreamQueue(io);
     } else {
-      if (activeLivestreamSession && activeLivestreamSession.checkerSocketId) {
+      if (
+        activeLivestreamSession &&
+        activeLivestreamSession.checkerSocketId &&
+        activeLivestreamSession.broadcastType !== "replay"
+      ) {
         io.to(activeLivestreamSession.checkerSocketId).emit("livestream:viewer_left", {
           viewerSocketId: socket.id,
         });
@@ -1861,6 +2194,10 @@ io.on("connection", (socket) => {
       activeChatWidgetConnections.delete(socket.id);
       broadcastOnlineCount(io);
       broadcastChatWidgetCount(io);
+    }
+
+    if (livestreamChatSockets.delete(socket.id)) {
+      broadcastLivestreamChatPresence(io);
     }
 
     // Remove from jukebox listeners if they were listening
@@ -2177,6 +2514,9 @@ setInterval(async () => {
     if (deleted.count > 0) {
       console.log(`[Cleanup] Deleted ${deleted.count} chat messages older than 30 days from database.`);
     }
+
+    // 3. Enforce rolling row cap on high-volume livestream chat for scalability
+    await pruneLivestreamChatHistory();
   } catch (err) {
     console.error("[Cleanup] Database pruning error:", err);
   }

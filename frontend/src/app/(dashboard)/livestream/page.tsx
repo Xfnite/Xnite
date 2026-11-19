@@ -2,7 +2,10 @@
 
 import { useEffect, useState, useRef } from "react";
 import { getSessionUser } from "@/app/actions/auth";
+import { getUserSidebarBanner } from "@/app/actions/user";
 import { isStaff } from "@/config/permissions";
+import { DEFAULT_SIDEBAR_BANNER_URL, normalizeBannerEmbedUrl } from "@/lib/bannerUrl";
+import { resolveSocketUrl } from "@/lib/socketUrl";
 import { 
   getCheckRecordingsAction, 
   getActiveLivestreamRoomAction,
@@ -10,6 +13,12 @@ import {
 } from "@/app/actions/livestream";
 import XfnitePlayer from "@/components/video/XfnitePlayer";
 import { ConfirmDeleteDialog } from "@/components/Attendance/ConfirmDeleteDialog";
+import {
+  LivestreamChat,
+  LivestreamChatMessage,
+  LivestreamChatUser,
+  formatChatSenderName,
+} from "@/components/Livestream/LivestreamChat";
 import { io, Socket } from "socket.io-client";
 import { 
   Radio, 
@@ -40,31 +49,42 @@ import {
   Save,
   Check,
   LogOut,
-  AlertTriangle
+  AlertTriangle,
+  MessageSquare,
+  PanelRightOpen,
+  Repeat,
+  X,
+  ChevronUp,
+  ChevronDown,
+  Pin
 } from "lucide-react";
 import { toast } from "sonner";
 
-function getSocketUrl(): string {
-  if (typeof window !== "undefined") {
-    if (process.env.NEXT_PUBLIC_SERVER_URL && !process.env.NEXT_PUBLIC_SERVER_URL.includes("localhost")) {
-      return process.env.NEXT_PUBLIC_SERVER_URL;
-    }
-    if (process.env.NEXT_PUBLIC_SOCKET_URL && !process.env.NEXT_PUBLIC_SOCKET_URL.includes("localhost")) {
-      return process.env.NEXT_PUBLIC_SOCKET_URL;
-    }
-    const hostname = window.location.hostname;
-    if (hostname.includes("staging.xfnite.cloud")) {
-      return "https://staging-server.xfnite.cloud";
-    }
-    if (hostname.includes("xfnite.cloud")) {
-      return "https://server.xfnite.cloud";
-    }
-  }
-  return (
-    process.env.NEXT_PUBLIC_SERVER_URL ||
-    process.env.NEXT_PUBLIC_SOCKET_URL ||
-    "http://localhost:3001"
-  );
+const LIVESTREAM_CHAT_TYPE = "livestream-chat";
+const MAX_CHAT_DISPLAY_MESSAGES = 150;
+
+interface ReplayRecordingItem {
+  id: string;
+  title?: string;
+  projectType?: string;
+  videoUrl: string;
+  durationSec?: number;
+  checkerName?: string;
+  createdAt?: string | Date;
+}
+
+interface ReplayLiveSessionPayload {
+  sessionId?: string;
+  title?: string;
+  projectType?: string;
+  checkerName?: string;
+  checkerEmail?: string;
+  broadcastType?: string;
+  replayRecordingId?: string | null;
+  replayVideoUrl?: string;
+  replayDurationSec?: number;
+  maxLoops?: number;
+  startedAt?: string | Date;
 }
 
 function getCookie(name: string): string | null {
@@ -135,6 +155,34 @@ export default function LivestreamPage() {
   const isStreamInterruptedRef = useRef(false);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Twitch-style Stream Chat state (active both during live & offline lobby)
+  const [chatMessages, setChatMessages] = useState<LivestreamChatMessage[]>([]);
+  const [isSocketConnected, setIsSocketConnected] = useState(false);
+  const [chatPresenceCount, setChatPresenceCount] = useState<number>(0);
+  const [isChatCollapsed, setIsChatCollapsed] = useState(false);
+  const [isLiveInfoCollapsed, setIsLiveInfoCollapsed] = useState(false);
+  const [showUnmuteHint, setShowUnmuteHint] = useState(false);
+  const unmuteHintShownSessionRef = useRef<string | null>(null);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [uptimeTickMs, setUptimeTickMs] = useState(() => Date.now());
+  const currentUserRef = useRef<LivestreamChatUser | null>(null);
+  const isChatCollapsedRef = useRef(false);
+  const activeBroadcastMetaRef = useRef<{ title: string; projectType: string; broadcastType: string } | null>(null);
+  const [offlineBannerUrl, setOfflineBannerUrl] = useState(DEFAULT_SIDEBAR_BANNER_URL);
+  const offlineBannerIframeRef = useRef<HTMLIFrameElement>(null);
+
+  // Synced Replay-to-Live Broadcast State
+  const [replayModalRecording, setReplayModalRecording] = useState<ReplayRecordingItem | null>(null);
+  const [replayLoopCount, setReplayLoopCount] = useState<number>(1);
+  const [replayLoopInput, setReplayLoopInput] = useState<string>("1");
+  const [replayBroadcastTitle, setReplayBroadcastTitle] = useState<string>("");
+  const [replayModalDurationSec, setReplayModalDurationSec] = useState<number>(0);
+  const [isStartingReplayLive, setIsStartingReplayLive] = useState<boolean>(false);
+  const [currentReplayLoop, setCurrentReplayLoop] = useState<number>(1);
+  const currentReplayLoopRef = useRef<number>(1);
+  const replayVideoRef = useRef<HTMLVideoElement | null>(null);
+  const replaySyncedSessionIdRef = useRef<string | null>(null);
+
   // Livestream Queue & Reservation State
   const [broadcastQueue, setBroadcastQueue] = useState<
     Array<{ position: number; email: string; name: string; role?: string; queuedAt?: string }>
@@ -174,6 +222,7 @@ export default function LivestreamPage() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const recordingStartTimeRef = useRef<number>(0);
 
   const unmuteViewer = () => {
     setIsViewerMuted(false);
@@ -348,26 +397,67 @@ export default function LivestreamPage() {
     };
   }, []);
 
-  // Setup Socket.io connection for real-time live streaming
+  // Keep refs synced for socket listeners
   useEffect(() => {
-    const token = getCookie("xnite_session");
-    const socket = io(getSocketUrl(), {
-      auth: { token },
-      transports: ["websocket", "polling"],
-    });
-    socketRef.current = socket;
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
 
-    socket.on("connect", () => {
-      socket.emit("livestream:get_status");
-      // If the viewer was watching the stream, automatically re-join the room upon reconnect
-      if (hasJoinedStreamRef.current) {
-        console.log("[Livestream Socket] Reconnected while watching. Re-joining room...");
-        reconnectViewerStream(false);
-      }
-    });
+  useEffect(() => {
+    isChatCollapsedRef.current = isChatCollapsed;
+  }, [isChatCollapsed]);
+
+  const expandStreamChat = () => {
+    setIsChatCollapsed(false);
+    setUnreadChatCount(0);
+  };
+
+  // Live stream uptime ticker
+  useEffect(() => {
+    if (!liveSession?.startedAt) return;
+    const interval = setInterval(() => {
+      setUptimeTickMs(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [liveSession?.startedAt]);
+
+  const streamUptimeSec = liveSession?.startedAt
+    ? Math.max(0, Math.floor((uptimeTickMs - new Date(liveSession.startedAt).getTime()) / 1000))
+    : 0;
+
+  // Setup Socket.io connection for real-time live streaming & stream chat
+  useEffect(() => {
+    let isMounted = true;
+    let activeSocket: Socket | null = null;
+
+    resolveSocketUrl().then((socketUrl) => {
+      if (!isMounted) return;
+
+      const token = getCookie("xnite_session");
+      const socket = io(socketUrl, {
+        auth: { token, client: "livestream" },
+        transports: ["websocket", "polling"],
+      });
+      activeSocket = socket;
+      socketRef.current = socket;
+
+      socket.on("connect", () => {
+        setIsSocketConnected(true);
+        socket.emit("livestream:get_status");
+        socket.emit("join_room", { chatType: LIVESTREAM_CHAT_TYPE });
+        socket.emit("get_room_history", { chatType: LIVESTREAM_CHAT_TYPE });
+        if (activeBroadcastMetaRef.current) {
+          socket.emit("livestream:checker_start", activeBroadcastMetaRef.current);
+        }
+        // If the viewer was watching the stream, automatically re-join the room upon reconnect
+        if (hasJoinedStreamRef.current) {
+          console.log("[Livestream Socket] Reconnected while watching. Re-joining room...");
+          reconnectViewerStream(false);
+        }
+      });
 
     socket.on("disconnect", (reason) => {
       console.warn("[Livestream Socket] Connection lost:", reason);
+      setIsSocketConnected(false);
       if (hasJoinedStreamRef.current) {
         setIsConnectingStream(true);
         setIsStreamInterrupted(true);
@@ -381,10 +471,13 @@ export default function LivestreamPage() {
 
     socket.on("livestream:stream_available", () => {
       socket.emit("livestream:get_status");
-      toast.info("A checker has started a live audit inspection! Click 'Watch Live Stream' to view.");
+      toast.info("A live audit broadcast has started!");
     });
 
     socket.on("livestream:status_update", ({ isLive, session, queue, reservedChecker: reserved }: any) => {
+      window.dispatchEvent(
+        new CustomEvent("livestream_status_changed", { detail: { isLive: Boolean(isLive && session) } })
+      );
       if (isLive && session) {
         setLiveSession(session);
       } else {
@@ -396,11 +489,33 @@ export default function LivestreamPage() {
         setIsConnectingStream(false);
         setIsStreamInterrupted(false);
         isStreamInterruptedRef.current = false;
+        currentReplayLoopRef.current = 1;
+        setCurrentReplayLoop(1);
+        replaySyncedSessionIdRef.current = null;
       }
       if (Array.isArray(queue)) {
         setBroadcastQueue(queue);
       }
       setReservedChecker(reserved || null);
+    });
+
+    socket.on("livestream:replay_started", ({ session }: { session: ReplayLiveSessionPayload }) => {
+      setIsStartingReplayLive(false);
+      setReplayModalRecording(null);
+      if (session) {
+        setLiveSession(session);
+      }
+      currentReplayLoopRef.current = 1;
+      setCurrentReplayLoop(1);
+      replaySyncedSessionIdRef.current = null;
+      setActiveTab("live");
+      const loops = Number(session?.maxLoops || 1);
+      toast.success(`Replay is now playing live (${loops} ${loops === 1 ? "loop" : "loops"}).`);
+    });
+
+    socket.on("livestream:replay_error", ({ message }: { message?: string }) => {
+      setIsStartingReplayLive(false);
+      toast.error(message || "Unable to start live replay broadcast.");
     });
 
     socket.on("livestream:your_turn", ({ message }: { expiresAt: number; message?: string }) => {
@@ -432,6 +547,7 @@ export default function LivestreamPage() {
     });
 
     socket.on("livestream:checker_busy", ({ message }: { message: string }) => {
+      setIsStartingReplayLive(false);
       toast.error(message || "Another checker is currently live. Only one broadcast can be active at a time.");
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach((t) => t.stop());
@@ -769,6 +885,9 @@ export default function LivestreamPage() {
     });
 
     socket.on("livestream:ended", () => {
+      window.dispatchEvent(
+        new CustomEvent("livestream_status_changed", { detail: { isLive: false } })
+      );
       setLiveSession(null);
       remoteStreamRef.current = null;
       if (viewerVideoRef.current) viewerVideoRef.current.srcObject = null;
@@ -781,17 +900,102 @@ export default function LivestreamPage() {
       setIsConnectingStream(false);
       setIsStreamInterrupted(false);
       isStreamInterruptedRef.current = false;
+      currentReplayLoopRef.current = 1;
+      setCurrentReplayLoop(1);
+      replaySyncedSessionIdRef.current = null;
       toast.info("The live inspection session has ended.");
     });
 
+    // --- Real-Time Stream Chat Listeners (Active during live & offline lobby) ---
+    socket.on("initial_messages", ({ chatType, messages }: { chatType: string; messages: LivestreamChatMessage[] }) => {
+      if (chatType !== LIVESTREAM_CHAT_TYPE || !Array.isArray(messages)) return;
+      setChatMessages(
+        messages
+          .map((m) => ({ ...m, createdAt: new Date(m.createdAt) }))
+          .slice(-MAX_CHAT_DISPLAY_MESSAGES)
+      );
+    });
+
+    socket.on("new_message", ({ chatType, message }) => {
+      if (chatType !== LIVESTREAM_CHAT_TYPE || !message) return;
+      const formatted: LivestreamChatMessage = {
+        ...message,
+        createdAt: new Date(message.createdAt),
+      };
+      const myEmail = (currentUserRef.current?.email || "").trim().toLowerCase();
+      const isFromMe = Boolean(
+        myEmail && message.senderEmail && message.senderEmail.trim().toLowerCase() === myEmail
+      );
+
+      setChatMessages((prev) => {
+        if (prev.some((m) => m.id === formatted.id)) return prev;
+        const filtered = isFromMe
+          ? prev.filter((m) => !(m.id.startsWith("temp-") && m.text.trim() === formatted.text.trim()))
+          : prev;
+        return [...filtered, formatted].slice(-MAX_CHAT_DISPLAY_MESSAGES);
+      });
+
+      if (!isFromMe && isChatCollapsedRef.current) {
+        setUnreadChatCount((c) => c + 1);
+      }
+    });
+
+    socket.on("message_edited", ({ chatType, message }) => {
+      if (chatType !== LIVESTREAM_CHAT_TYPE || !message) return;
+      const formatted: LivestreamChatMessage = {
+        ...message,
+        createdAt: new Date(message.createdAt),
+      };
+      setChatMessages((prev) => prev.map((m) => (m.id === formatted.id ? formatted : m)));
+    });
+
+    socket.on("message_deleted", ({ chatType, message }) => {
+      if (chatType !== LIVESTREAM_CHAT_TYPE || !message) return;
+      const formatted: LivestreamChatMessage = {
+        ...message,
+        createdAt: new Date(message.createdAt),
+      };
+      setChatMessages((prev) => prev.map((m) => (m.id === formatted.id ? formatted : m)));
+    });
+
+    socket.on("message_removed", ({ chatType, messageId }) => {
+      if (chatType !== LIVESTREAM_CHAT_TYPE || !messageId) return;
+      setChatMessages((prev) => prev.filter((m) => m.id !== messageId));
+    });
+
+    socket.on("livestream_chat_cleared", ({ clearedBy }: { clearedBy?: string }) => {
+      setChatMessages([]);
+      setUnreadChatCount(0);
+      toast.info(`Stream chat was cleared${clearedBy ? ` by ${clearedBy}` : ""}.`);
+    });
+
+    socket.on("livestream_chat:presence", (count: number) => {
+      if (typeof count === "number") {
+        setChatPresenceCount(count);
+      }
+    });
+
+      socket.on("error_message", (err: unknown) => {
+        if (typeof err === "string" && !err.includes("do not have access")) {
+          toast.error(err);
+        }
+      });
+    });
+
     return () => {
+      isMounted = false;
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
       if (viewerPeerConnectionRef.current) {
         try { viewerPeerConnectionRef.current.close(); } catch {}
       }
-      socket.disconnect();
+      if (activeSocket) {
+        activeSocket.disconnect();
+      }
+      if (socketRef.current === activeSocket) {
+        socketRef.current = null;
+      }
     };
   }, []);
 
@@ -804,6 +1008,43 @@ export default function LivestreamPage() {
       .catch(() => setIsLoading(false));
 
     loadRecordings();
+
+    getUserSidebarBanner()
+      .then((res) => {
+        if (res.success && res.url) {
+          setOfflineBannerUrl(normalizeBannerEmbedUrl(res.url));
+        }
+      })
+      .catch(() => {});
+
+    const handleBannerUpdated = (e: Event) => {
+      const detail = (e as CustomEvent<{ url?: string }>).detail;
+      if (detail?.url) {
+        setOfflineBannerUrl(normalizeBannerEmbedUrl(detail.url));
+      }
+    };
+
+    const handleYoutubeMessage = (e: MessageEvent) => {
+      if (e.origin !== "https://www.youtube.com") return;
+      try {
+        const data = typeof e.data === "string" ? JSON.parse(e.data) : e.data;
+        const win = offlineBannerIframeRef.current?.contentWindow;
+        if (!win) return;
+        if (data.event === "onStateChange" && data.info === 0) {
+          win.postMessage(JSON.stringify({ event: "command", func: "seekTo", args: [0, true] }), "*");
+          win.postMessage(JSON.stringify({ event: "command", func: "playVideo", args: [] }), "*");
+        } else if (data.event === "onStateChange" && data.info === 2) {
+          win.postMessage(JSON.stringify({ event: "command", func: "playVideo", args: [] }), "*");
+        }
+      } catch {}
+    };
+
+    window.addEventListener("sidebar_banner_updated", handleBannerUpdated);
+    window.addEventListener("message", handleYoutubeMessage);
+    return () => {
+      window.removeEventListener("sidebar_banner_updated", handleBannerUpdated);
+      window.removeEventListener("message", handleYoutubeMessage);
+    };
   }, []);
 
   const loadRecordings = async (filter?: string) => {
@@ -977,14 +1218,18 @@ export default function LivestreamPage() {
       setIsCapturing(true);
       setBroadcastSource("screen");
       setRecordingSeconds(0);
+      recordingStartTimeRef.current = Date.now();
+
+      const broadcastMeta = {
+        title,
+        projectType: sessionProjectType,
+        broadcastType: "screen",
+      };
+      activeBroadcastMetaRef.current = broadcastMeta;
 
       // Broadcast to all viewers via Socket.io that checker is LIVE
       if (socketRef.current) {
-        socketRef.current.emit("livestream:checker_start", {
-          title,
-          projectType: sessionProjectType,
-          broadcastType: "screen",
-        });
+        socketRef.current.emit("livestream:checker_start", broadcastMeta);
       }
 
       // Start Recording Timer
@@ -1013,6 +1258,7 @@ export default function LivestreamPage() {
       timerIntervalRef.current = null;
     }
 
+    activeBroadcastMetaRef.current = null;
     // Notify viewers that live broadcast ended
     if (socketRef.current) {
       socketRef.current.emit("livestream:checker_stop");
@@ -1024,8 +1270,10 @@ export default function LivestreamPage() {
     setLiveViewerCount(0);
 
     const recorder = mediaRecorderRef.current;
-    const finalDuration = recordingSeconds;
-    setRecordedDuration(finalDuration);
+    const elapsedSeconds = recordingStartTimeRef.current
+      ? Math.max(1, Math.round((Date.now() - recordingStartTimeRef.current) / 1000))
+      : recordingSeconds;
+    setRecordedDuration(elapsedSeconds);
 
     recorder.onstop = () => {
       // Stop all tracks on screen, mic, and combined streams
@@ -1056,6 +1304,28 @@ export default function LivestreamPage() {
     recorder.stop();
   };
 
+  // Shared upload helper with safe JSON/HTTP error handling
+  const uploadRecordingFormData = async (formData: FormData) => {
+    const response = await fetch("/api/livestream/upload", {
+      method: "POST",
+      body: formData,
+    });
+    const rawText = await response.text();
+    let data: { success?: boolean; recording?: any; error?: string } = {};
+    try {
+      data = rawText ? JSON.parse(rawText) : {};
+    } catch {
+      if (response.status === 413) {
+        throw new Error("Recording file is too large for the upload limit.");
+      }
+      throw new Error(`Upload failed (HTTP ${response.status}).`);
+    }
+    if (!response.ok && !data.error) {
+      throw new Error(`Upload failed (HTTP ${response.status}).`);
+    }
+    return data;
+  };
+
   // Publish Recording to Replay Library
   const handlePublishRecording = async () => {
     if (!recordedBlob) return;
@@ -1064,7 +1334,7 @@ export default function LivestreamPage() {
     toast.info("Publishing recording to Replay Library...");
 
     const filename = `audit-${Date.now()}.webm`;
-    const file = new File([recordedBlob], filename, { type: "video/webm" });
+    const file = new File([recordedBlob], filename, { type: recordedBlob.type || "video/webm" });
 
     try {
       const formData = new FormData();
@@ -1074,12 +1344,7 @@ export default function LivestreamPage() {
       formData.append("durationSec", String(recordedDuration));
       formData.append("description", sessionNotes);
 
-      const response = await fetch("/api/livestream/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await response.json();
+      const data = await uploadRecordingFormData(formData);
       if (data.success && data.recording) {
         toast.success("Check session successfully published to Replay Library!");
         if (recordedBlobUrl) URL.revokeObjectURL(recordedBlobUrl);
@@ -1115,6 +1380,7 @@ export default function LivestreamPage() {
 
   // Discard while still actively live recording
   const discardCapture = () => {
+    activeBroadcastMetaRef.current = null;
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     if (socketRef.current) socketRef.current.emit("livestream:checker_stop");
     peerConnectionsRef.current.forEach((pc) => pc.close());
@@ -1288,13 +1554,15 @@ export default function LivestreamPage() {
 
         const broadcastTitle = sessionTitle || uploadTitle || uploadFile?.name || "Quality Audit Check";
         const broadcastType = sessionProjectType || uploadProjectType;
+        const broadcastMeta = {
+          title: broadcastTitle,
+          projectType: broadcastType,
+          broadcastType: "video",
+        };
+        activeBroadcastMetaRef.current = broadcastMeta;
 
         if (socketRef.current) {
-          socketRef.current.emit("livestream:checker_start", {
-            title: broadcastTitle,
-            projectType: broadcastType,
-            broadcastType: "video",
-          });
+          socketRef.current.emit("livestream:checker_start", broadcastMeta);
         }
 
         if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
@@ -1321,6 +1589,7 @@ export default function LivestreamPage() {
 
   // Finish Video Broadcast (opens Review screen)
   const finishVideoBroadcast = () => {
+    activeBroadcastMetaRef.current = null;
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
       timerIntervalRef.current = null;
@@ -1360,6 +1629,7 @@ export default function LivestreamPage() {
 
   // Discard Video Broadcast while actively live
   const discardVideoBroadcast = () => {
+    activeBroadcastMetaRef.current = null;
     if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     if (socketRef.current) socketRef.current.emit("livestream:checker_stop");
     peerConnectionsRef.current.forEach((pc) => pc.close());
@@ -1406,12 +1676,7 @@ export default function LivestreamPage() {
       formData.append("durationSec", String(recordedDuration || videoDuration || 0));
       formData.append("description", sessionNotes || uploadNotes);
 
-      const response = await fetch("/api/livestream/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await response.json();
+      const data = await uploadRecordingFormData(formData);
       if (data.success && data.recording) {
         toast.success("Check session successfully published to Replay Library!");
         if (uploadBlobUrl) URL.revokeObjectURL(uploadBlobUrl);
@@ -1544,12 +1809,7 @@ export default function LivestreamPage() {
       formData.append("durationSec", String(videoDuration || 0));
       formData.append("description", uploadNotes);
 
-      const response = await fetch("/api/livestream/upload", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await response.json();
+      const data = await uploadRecordingFormData(formData);
       if (data.success && data.recording) {
         toast.success("Video check uploaded successfully to Replay Library!");
         if (uploadBlobUrl) URL.revokeObjectURL(uploadBlobUrl);
@@ -1577,7 +1837,282 @@ export default function LivestreamPage() {
     return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
   };
 
+  const formatUptime = (totalSeconds: number) => {
+    const hrs = Math.floor(totalSeconds / 3600);
+    const mins = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    if (hrs > 0) {
+      return `${hrs}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+    }
+    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  };
+
+  const normalizeSenderRole = (role?: string): string => {
+    const clean = (role || "").trim().toLowerCase();
+    if (clean === "admin") return "admin";
+    if (clean === "judger") return "judger";
+    if (clean === "checker") return "checker";
+    if (clean === "recruiter") return "recruiter";
+    if (["old-labeler", "old-laber", "old labeler"].includes(clean)) return "old";
+    if (clean === "labeler") return "labeler";
+    if (clean === "applicant") return "applicant";
+    return "member";
+  };
+
+  const handleSendChatMessage = ({
+    text,
+    replyTo,
+  }: {
+    text: string;
+    replyTo?: LivestreamChatMessage | null;
+  }): boolean => {
+    if (!socketRef.current || !isSocketConnected) {
+      toast.error("Reconnecting to stream chat...");
+      return false;
+    }
+
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const optimistic: LivestreamChatMessage = {
+      id: tempId,
+      chatType: LIVESTREAM_CHAT_TYPE,
+      sender: currentUser?.name || currentUser?.email || "You",
+      senderEmail: currentUser?.email || null,
+      senderRole: normalizeSenderRole(currentUser?.role),
+      senderFirstName: currentUser?.firstName || null,
+      senderLastName: currentUser?.lastName || null,
+      text,
+      createdAt: new Date(),
+      replyToId: replyTo ? replyTo.id : null,
+      replyToSender: replyTo ? formatChatSenderName(replyTo) : null,
+      replyToText: replyTo ? replyTo.text : null,
+    };
+
+    setChatMessages((prev) => [...prev, optimistic].slice(-MAX_CHAT_DISPLAY_MESSAGES));
+
+    socketRef.current.emit("send_message", {
+      chatType: LIVESTREAM_CHAT_TYPE,
+      text,
+      replyToId: replyTo ? replyTo.id : null,
+      replyToSender: replyTo ? formatChatSenderName(replyTo) : null,
+      replyToText: replyTo ? replyTo.text : null,
+    });
+    return true;
+  };
+
+  const handleEditChatMessage = (messageId: string, newText: string): boolean => {
+    if (!socketRef.current || !isSocketConnected) {
+      toast.error("Reconnecting to stream chat...");
+      return false;
+    }
+    socketRef.current.emit("edit_message", {
+      chatType: LIVESTREAM_CHAT_TYPE,
+      messageId,
+      newText,
+    });
+    return true;
+  };
+
+  const handleDeleteChatMessage = (messageId: string, forceDelete: boolean) => {
+    if (!socketRef.current || !isSocketConnected) {
+      toast.error("Reconnecting to stream chat...");
+      return;
+    }
+    if (!forceDelete) {
+      setChatMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, text: "Message unsent" } : m))
+      );
+    } else {
+      setChatMessages((prev) => prev.filter((m) => m.id !== messageId));
+    }
+    socketRef.current.emit("delete_message", {
+      chatType: LIVESTREAM_CHAT_TYPE,
+      messageId,
+      forceDelete,
+    });
+  };
+
   const isUserStaff = isStaff(currentUser?.role);
+  const isReplayBroadcastActive = Boolean(
+    !isCapturing && liveSession?.broadcastType === "replay" && liveSession?.replayVideoUrl
+  );
+  const canManageLiveReplay = Boolean(
+    liveSession?.broadcastType === "replay" &&
+      currentUser &&
+      ((liveSession.checkerEmail &&
+        currentUser.email &&
+        liveSession.checkerEmail.trim().toLowerCase() === currentUser.email.trim().toLowerCase()) ||
+        (currentUser.role || "").trim().toLowerCase() === "admin")
+  );
+
+  // Track room presence automatically when watching a live Replay Broadcast
+  useEffect(() => {
+    if (!socketRef.current || !isSocketConnected) return;
+    if (activeTab === "live" && isReplayBroadcastActive) {
+      socketRef.current.emit("livestream:join_room");
+      return () => {
+        socketRef.current?.emit("livestream:leave_room");
+      };
+    }
+  }, [activeTab, isReplayBroadcastActive, isSocketConnected]);
+
+  // Prevent live replay audio bleeding while browsing Replay Library or Studio tabs
+  useEffect(() => {
+    if (replayVideoRef.current) {
+      replayVideoRef.current.muted = isViewerMuted || activeTab !== "live";
+    }
+  }, [isViewerMuted, activeTab, isReplayBroadcastActive]);
+
+  // Show the unmute prompt only once per live session for a brief period, then settle into low-opacity hover state
+  useEffect(() => {
+    const isWatchingLiveAudio = isReplayBroadcastActive || Boolean(liveSession && hasJoinedStream);
+    if (!isWatchingLiveAudio) {
+      setShowUnmuteHint(false);
+      if (!liveSession) {
+        unmuteHintShownSessionRef.current = null;
+      }
+      return;
+    }
+
+    if (!isViewerMuted) {
+      setShowUnmuteHint(false);
+      return;
+    }
+
+    const sessionKey = String(liveSession?.sessionId || liveSession?.startedAt || "active");
+    if (unmuteHintShownSessionRef.current === sessionKey) {
+      return;
+    }
+
+    unmuteHintShownSessionRef.current = sessionKey;
+    setShowUnmuteHint(true);
+    const timer = setTimeout(() => {
+      setShowUnmuteHint(false);
+    }, 4500);
+
+    return () => clearTimeout(timer);
+  }, [isReplayBroadcastActive, liveSession, hasJoinedStream, isViewerMuted]);
+
+  const openReplayBroadcastModal = (recording: ReplayRecordingItem, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!recording?.videoUrl) {
+      toast.error("This recording does not have a playable video URL.");
+      return;
+    }
+    setReplayModalRecording(recording);
+    setReplayBroadcastTitle(recording.title || "Replay Audit Stream");
+    setReplayLoopCount(1);
+    setReplayLoopInput("1");
+    setReplayModalDurationSec(Number(recording.durationSec || 0));
+  };
+
+  const handleStartReplayBroadcast = () => {
+    if (!replayModalRecording) return;
+    if (!socketRef.current || !isSocketConnected) {
+      toast.error("Still connecting to stream server. Please try again.");
+      return;
+    }
+    if (isCapturing) {
+      toast.error("Stop your active Studio broadcast before starting a Replay live stream.");
+      return;
+    }
+    if (isAnotherCheckerLive) {
+      toast.error(`Checker "${liveSession.checkerName}" is currently live. Wait until their stream ends.`);
+      return;
+    }
+    if (isAnotherCheckerReserved && reservedChecker) {
+      toast.error(`Broadcast slot is currently reserved for ${reservedChecker.name}.`);
+      return;
+    }
+
+    const parsedLoops = parseInt(replayLoopInput || String(replayLoopCount), 10);
+    const maxLoops = Number.isFinite(parsedLoops) ? Math.max(1, Math.min(50, parsedLoops)) : 1;
+
+    setIsStartingReplayLive(true);
+    socketRef.current.emit("livestream:replay_start", {
+      recordingId: replayModalRecording.id,
+      videoUrl: replayModalRecording.videoUrl,
+      title: replayBroadcastTitle.trim() || replayModalRecording.title || "Replay Audit Stream",
+      projectType: replayModalRecording.projectType || "Standard Building",
+      durationSec: replayModalDurationSec || replayModalRecording.durationSec || 0,
+      maxLoops,
+    });
+  };
+
+  const handleEndReplayBroadcast = () => {
+    if (!socketRef.current || !isSocketConnected) {
+      toast.error("Reconnecting to stream server...");
+      return;
+    }
+    socketRef.current.emit("livestream:checker_stop");
+    toast.info("Stopping live replay broadcast...");
+  };
+
+  const syncReplayVideoToLive = (videoEl: HTMLVideoElement, forceSeek = false) => {
+    if (!liveSession || liveSession.broadcastType !== "replay") return;
+    const maxLoops = Math.max(1, Number(liveSession.maxLoops || 1));
+    const dur =
+      videoEl.duration && isFinite(videoEl.duration) && videoEl.duration > 0
+        ? videoEl.duration
+        : Number(liveSession.replayDurationSec || 0);
+
+    if (
+      canManageLiveReplay &&
+      dur > 0 &&
+      (!liveSession.replayDurationSec || Math.abs(dur - Number(liveSession.replayDurationSec)) > 1)
+    ) {
+      socketRef.current?.emit("livestream:replay_report_duration", {
+        sessionId: liveSession.sessionId,
+        durationSec: dur,
+      });
+    }
+
+    if (dur > 0 && liveSession.startedAt) {
+      const elapsedSec = Math.max(0, (Date.now() - new Date(liveSession.startedAt).getTime()) / 1000);
+      if (elapsedSec >= dur * maxLoops) {
+        currentReplayLoopRef.current = maxLoops;
+        setCurrentReplayLoop(maxLoops);
+        try {
+          videoEl.currentTime = Math.max(0, dur - 0.1);
+        } catch {}
+        videoEl.pause();
+        socketRef.current?.emit("livestream:replay_completed", {
+          sessionId: liveSession.sessionId,
+        });
+        return;
+      }
+
+      const calcLoop = Math.min(maxLoops, Math.floor(elapsedSec / dur) + 1);
+      const offset = elapsedSec % dur;
+      currentReplayLoopRef.current = calcLoop;
+      setCurrentReplayLoop(calcLoop);
+
+      if ((forceSeek || elapsedSec > 1.5) && offset < dur - 0.25) {
+        try {
+          videoEl.currentTime = offset;
+        } catch {}
+      }
+    } else {
+      currentReplayLoopRef.current = 1;
+      setCurrentReplayLoop(1);
+    }
+
+    videoEl.play().catch(() => {
+      videoEl.muted = true;
+      setIsViewerMuted(true);
+      videoEl.play().catch(() => {});
+    });
+  };
+
+  const activeDisplaySession =
+    liveSession ||
+    (isCapturing
+      ? {
+          title: sessionTitle || "Live Quality Audit Inspection",
+          checkerName: currentUser?.name || "You",
+          projectType: sessionProjectType || "Standard Building",
+          broadcastType: broadcastSource || "screen",
+        }
+      : null);
 
   return (
     <div className="relative w-full min-h-full">
@@ -1593,24 +2128,12 @@ export default function LivestreamPage() {
         />
       </div>
 
-      <div className="relative space-y-6 lg:space-y-8 w-full max-w-6xl mx-auto pt-4 pb-16 z-10 px-4 sm:px-6">
+      <div className="relative space-y-6 lg:space-y-7 w-full max-w-[1720px] mx-auto pt-3 pb-20 z-10 px-1 sm:px-3">
         {/* Header Section */}
         <section className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-black/5 dark:border-white/5 pb-6">
           <div>
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold tracking-wide uppercase bg-emerald-500/10 text-[#1F7A1F] dark:text-[#55f761] border border-emerald-500/20">
-                <span className={`w-1.5 h-1.5 rounded-full ${liveSession ? "bg-red-500 animate-ping" : "bg-[#1F7A1F] dark:bg-[#55f761] animate-pulse"}`} />
-                {liveSession ? "Live Broadcast Active" : "Live Review Hub"}
-              </span>
-              {isUserStaff && (
-                <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold uppercase bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20">
-                  <ShieldCheck className="w-3 h-3" />
-                  Checker Privileges
-                </span>
-              )}
-            </div>
             <h1 className="text-2xl lg:text-3xl font-bold tracking-tight text-[#0D1B2A] dark:text-white">
-              Livestreams & Check Reviews
+              Livestreams &amp; Replays
             </h1>
             <p className="text-sm text-[#2F3E46]/80 dark:text-white/60 mt-1 max-w-2xl">
               Watch real-time project inspections, learn grading standards directly from checkers, or review past recordings on demand.
@@ -1643,7 +2166,7 @@ export default function LivestreamPage() {
               }`}
             >
               <Film className="w-3.5 h-3.5" />
-              Replay Library ({recordings.length})
+              Replay Library
             </button>
             {isUserStaff && (
               <button
@@ -1662,14 +2185,180 @@ export default function LivestreamPage() {
           </div>
         </section>
 
-        {/* Tab 1: Live Stream Player */}
-        <div className={activeTab === "live" ? "space-y-4 max-w-5xl mx-auto" : "hidden"}>
-          {/* Main Live Player Column */}
-          <div className="space-y-4">
-              <div className="relative aspect-video w-full bg-black rounded-2xl overflow-hidden shadow-2xl border border-black/10 dark:border-white/10 group flex items-center justify-center">
-                {/* Mode A: Real-Time WebRTC In-Browser Stream when a Checker is LIVE */}
-                {liveSession ? (
-                  isCapturing ? (
+        {/* Tab 1: Twitch-Style Live Stream Player + Stream Info + Collapsible Animated Side Chat */}
+        <div
+          className={
+            activeTab === "live"
+              ? "flex flex-col lg:flex-row lg:items-stretch"
+              : "hidden"
+          }
+        >
+          {/* Main Left Column: 16:9 Video Stage + Below-Player Stream Info Bar */}
+          <div className="flex-1 min-w-0 space-y-3 transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]">
+              <div className="relative aspect-video w-full bg-black rounded-2xl overflow-hidden shadow-2xl border border-black/10 dark:border-white/10 group flex items-center justify-center transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]">
+                {/* Desktop Expand Chat button when collapsed (Twitch Theater-style) */}
+                <button
+                  type="button"
+                  onClick={expandStreamChat}
+                  aria-hidden={!isChatCollapsed}
+                  className={`hidden lg:flex absolute top-3 right-3 z-40 items-center gap-1.5 px-3 py-1.5 rounded-xl bg-black/75 hover:bg-black/90 text-white text-xs font-semibold border border-white/20 backdrop-blur-md shadow-lg transition-all duration-300 ease-out cursor-pointer ${
+                    isChatCollapsed
+                      ? "opacity-100 scale-100 translate-x-0"
+                      : "opacity-0 scale-95 translate-x-2 pointer-events-none"
+                  }`}
+                  title="Expand Stream Chat"
+                >
+                  <PanelRightOpen className="w-3.5 h-3.5 text-[#55f761]" />
+                  <span>Show Chat</span>
+                  {unreadChatCount > 0 && (
+                    <span className="px-1.5 py-0.25 rounded-full bg-red-500 text-white text-[10px] font-bold">
+                      {unreadChatCount > 99 ? "99+" : unreadChatCount}
+                    </span>
+                  )}
+                </button>
+
+                {/* Unified Top Live Stream Info Overlay (Active Pinned Card vs Collapsed Top-Hover Scrim) */}
+                {activeDisplaySession && (
+                  !isLiveInfoCollapsed ? (
+                    /* Design 1 (Active / Always Showing): Docked frosted glass card bar */
+                    <div
+                      className={`absolute top-3 left-3 z-30 transition-all duration-300 pointer-events-auto ${
+                        isChatCollapsed ? "right-3 lg:right-32" : "right-3"
+                      }`}
+                    >
+                      <div className="bg-[#0B121B]/85 backdrop-blur-xl rounded-2xl border border-white/15 px-3.5 py-2.5 shadow-[0_12px_32px_rgba(0,0,0,0.55)] flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="relative shrink-0">
+                            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#1F7A1F] to-[#55f761] text-[#060D14] flex items-center justify-center font-black text-sm ring-2 ring-red-500 ring-offset-2 ring-offset-[#0B121B]">
+                              {(activeDisplaySession.checkerName || "C").charAt(0).toUpperCase()}
+                            </div>
+                            <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 px-1.5 py-[1px] rounded bg-red-600 text-white text-[7px] font-black uppercase tracking-wider shadow">
+                              LIVE
+                            </span>
+                          </div>
+                          <div className="min-w-0">
+                            <h3 className="text-xs sm:text-sm font-bold text-white truncate">
+                              {activeDisplaySession.title || "Live Quality Audit Inspection"}
+                            </h3>
+                            <div className="flex flex-wrap items-center gap-1.5 text-[11px] mt-0.5">
+                              <span className="font-semibold text-[#55f761]">
+                                {activeDisplaySession.checkerName}
+                              </span>
+                              <span className="px-1.5 py-0.5 rounded bg-blue-500/20 text-sky-400 text-[9px] font-bold uppercase border border-blue-400/25">
+                                Overseer
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full bg-white/10 text-white/85 text-[10px] font-medium">
+                                {activeDisplaySession.projectType || "Standard Building"}
+                              </span>
+                              <span className="text-[10px] text-white/55">
+                                {activeDisplaySession.broadcastType === "video" || activeDisplaySession.broadcastType === "replay"
+                                  ? "Video Audit"
+                                  : "Screen Share"}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                          <span className="flex items-center gap-1 px-2 py-1 rounded-xl bg-red-500/15 text-red-300 text-[11px] font-bold border border-red-500/25">
+                            <Users className="w-3 h-3" />
+                            {liveViewerCount} watching
+                          </span>
+                          <span className="flex items-center gap-1 px-2 py-1 rounded-xl bg-white/10 text-white/90 text-[11px] font-mono font-semibold border border-white/10">
+                            <Clock className="w-3 h-3 text-[#55f761]" />
+                            {formatUptime(isCapturing && !liveSession ? recordingSeconds : streamUptimeSec)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setIsLiveInfoCollapsed(true)}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-[#55f761]/15 hover:bg-[#55f761]/25 text-[#55f761] text-[11px] font-bold border border-[#55f761]/30 transition-all cursor-pointer"
+                            title="Collapse live info bar (hover top of video to reveal)"
+                          >
+                            <ChevronUp className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline">Collapse</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Design 2 (Collapsed -> On Hover): Minimal chip at rest, edge-to-edge top gradient banner when hovering anywhere along top */
+                    <div className="group/top-live absolute top-0 inset-x-0 z-30 h-28 flex items-start pointer-events-auto">
+                      {/* Minimal rest pill — clicking expands immediately */}
+                      <button
+                        type="button"
+                        onClick={() => setIsLiveInfoCollapsed(false)}
+                        className="absolute top-3 left-3 pointer-events-auto flex items-center gap-2 px-2.5 py-1 rounded-full bg-black/65 hover:bg-black/85 backdrop-blur-md text-white text-[10px] font-bold uppercase tracking-wider border border-white/15 shadow-lg transition-opacity duration-200 group-hover/top-live:opacity-0 cursor-pointer"
+                        title="Expand & keep stream info visible"
+                      >
+                        <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
+                        <span>Live</span>
+                        <span className="text-white/65 font-mono normal-case">
+                          {formatUptime(isCapturing && !liveSession ? recordingSeconds : streamUptimeSec)}
+                        </span>
+                        <ChevronDown className="w-3 h-3 text-[#55f761]" />
+                      </button>
+
+                      {/* Hover reveal gradient overlay */}
+                      <div
+                        className={`w-full px-4 pt-3.5 pb-8 bg-gradient-to-b from-black/95 via-black/75 to-transparent flex flex-wrap items-center justify-between gap-3 opacity-0 -translate-y-2 pointer-events-none group-hover/top-live:opacity-100 group-hover/top-live:translate-y-0 group-hover/top-live:pointer-events-auto transition-all duration-300 ease-out ${
+                          isChatCollapsed ? "lg:pr-36" : ""
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="relative shrink-0">
+                            <div className="w-9 h-9 rounded-full bg-white/10 text-[#55f761] flex items-center justify-center font-black text-sm border border-white/20 backdrop-blur-md">
+                              {(activeDisplaySession.checkerName || "C").charAt(0).toUpperCase()}
+                            </div>
+                            <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 px-1.5 py-[1px] rounded bg-red-600 text-white text-[7px] font-black uppercase tracking-wider">
+                              LIVE
+                            </span>
+                          </div>
+                          <div className="min-w-0">
+                            <h3 className="text-sm font-bold text-white truncate drop-shadow-sm">
+                              {activeDisplaySession.title || "Live Quality Audit Inspection"}
+                            </h3>
+                            <p className="text-[11px] text-white/75 truncate flex flex-wrap items-center gap-1.5">
+                              <span className="font-semibold text-[#55f761]">
+                                {activeDisplaySession.checkerName}
+                              </span>
+                              <span>&bull;</span>
+                              <span>{activeDisplaySession.projectType || "Standard Building"}</span>
+                              <span>&bull;</span>
+                              <span>
+                                {activeDisplaySession.broadcastType === "video" || activeDisplaySession.broadcastType === "replay"
+                                  ? "Video Audit"
+                                  : "Screen Share"}
+                              </span>
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <span className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-black/55 text-red-300 text-[11px] font-bold border border-white/15 backdrop-blur-md">
+                            <Users className="w-3 h-3" />
+                            {liveViewerCount} watching
+                          </span>
+                          <span className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-black/55 text-white text-[11px] font-mono font-semibold border border-white/15 backdrop-blur-md">
+                            <Clock className="w-3 h-3 text-[#55f761]" />
+                            {formatUptime(isCapturing && !liveSession ? recordingSeconds : streamUptimeSec)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setIsLiveInfoCollapsed(false)}
+                            className="flex items-center gap-1 px-2.5 py-1 rounded-full bg-white/15 hover:bg-white/25 text-white text-[11px] font-bold border border-white/25 backdrop-blur-md transition-all cursor-pointer shadow-lg"
+                            title="Pin stream info so it always shows"
+                          >
+                            <Pin className="w-3 h-3 text-[#55f761]" />
+                            <span>Always Show</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                )}
+
+                {/* Mode A: Real-Time WebRTC In-Browser Stream when broadcasting or a Checker is LIVE */}
+                {isCapturing ? (
                     <div className="relative w-full h-full bg-black flex items-center justify-center">
                       <video
                         ref={(el) => {
@@ -1688,15 +2377,11 @@ export default function LivestreamPage() {
                         muted
                         className="w-full h-full object-contain"
                       />
-                      <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/90 text-white text-xs font-bold uppercase tracking-wider shadow-lg">
-                        <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                        {broadcastSource === "video" ? "LIVE VIDEO AUDIT (YOUR FEED)" : "LIVE SCREEN SHARE (YOUR FEED)"}
-                      </div>
 
-                      <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
+                      <div className="absolute bottom-4 right-4 z-30 flex items-center gap-2">
                         <button
                           onClick={() => setActiveTab("studio")}
-                          className="px-3 py-1.5 rounded-xl bg-[#1F7A1F] dark:bg-[#55f761] hover:scale-105 active:scale-95 text-white dark:text-[#060D14] text-xs font-bold flex items-center gap-1.5 shadow-lg transition-all cursor-pointer backdrop-blur-md"
+                          className="px-3.5 py-1.5 rounded-xl bg-[#1F7A1F] dark:bg-[#55f761] hover:scale-105 active:scale-95 text-white dark:text-[#060D14] text-xs font-bold flex items-center gap-1.5 shadow-lg transition-all cursor-pointer backdrop-blur-md"
                         >
                           <ScreenShare className="w-3.5 h-3.5" />
                           Return to Studio Controls
@@ -1708,7 +2393,115 @@ export default function LivestreamPage() {
                         <span>{liveViewerCount} {liveViewerCount === 1 ? "viewer" : "viewers"} watching your live check</span>
                       </div>
                     </div>
-                  ) : hasJoinedStream ? (
+                  ) : isReplayBroadcastActive ? (
+                    <div className="relative w-full h-full bg-black flex items-center justify-center">
+                      <video
+                        key={liveSession.sessionId || liveSession.replayVideoUrl}
+                        ref={(el) => {
+                          replayVideoRef.current = el;
+                          if (el) {
+                            el.muted = isViewerMuted;
+                            el.defaultMuted = isViewerMuted;
+                          }
+                        }}
+                        src={liveSession.replayVideoUrl}
+                        autoPlay
+                        playsInline
+                        muted={isViewerMuted}
+                        onLoadedMetadata={(e) => {
+                          const video = e.currentTarget;
+                          const isNewSession = replaySyncedSessionIdRef.current !== (liveSession.sessionId || liveSession.replayVideoUrl);
+                          replaySyncedSessionIdRef.current = liveSession.sessionId || liveSession.replayVideoUrl;
+                          syncReplayVideoToLive(video, isNewSession);
+                        }}
+                        onEnded={(e) => {
+                          const video = e.currentTarget;
+                          const maxLoops = Math.max(1, Number(liveSession?.maxLoops || 1));
+                          if (currentReplayLoopRef.current < maxLoops) {
+                            const nextLoop = currentReplayLoopRef.current + 1;
+                            currentReplayLoopRef.current = nextLoop;
+                            setCurrentReplayLoop(nextLoop);
+                            video.currentTime = 0;
+                            video.play().catch(() => {});
+                          } else {
+                            video.pause();
+                            socketRef.current?.emit("livestream:replay_completed", {
+                              sessionId: liveSession.sessionId,
+                            });
+                          }
+                        }}
+                        className="w-full h-full object-contain"
+                      />
+
+                      <div className="absolute bottom-4 right-4 z-30 flex flex-wrap items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextMuted = !isViewerMuted;
+                            setIsViewerMuted(nextMuted);
+                            if (!nextMuted) setShowUnmuteHint(false);
+                            if (replayVideoRef.current) {
+                              replayVideoRef.current.muted = nextMuted;
+                              if (!nextMuted) {
+                                replayVideoRef.current.volume = 1;
+                                replayVideoRef.current.play().catch(() => {});
+                              }
+                            }
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer border transition-all duration-300 backdrop-blur-md ${
+                            isViewerMuted && showUnmuteHint
+                              ? "bg-emerald-600/45 hover:bg-emerald-600/80 text-white/90 border-white/15 opacity-75 hover:opacity-100 shadow-lg"
+                              : "bg-black/35 hover:bg-black/75 text-white/80 hover:text-white border-white/10 opacity-35 hover:opacity-100"
+                          }`}
+                        >
+                          {isViewerMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                          <span>{isViewerMuted ? (showUnmuteHint ? "Click to Unmute" : "Unmute") : "Mute"}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (replayVideoRef.current) {
+                              syncReplayVideoToLive(replayVideoRef.current, true);
+                              toast.info("Synced to live replay timestamp.");
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-black/70 hover:bg-black/90 text-white text-xs font-semibold flex items-center gap-1.5 border border-white/20 transition-all cursor-pointer backdrop-blur-md"
+                          title="Sync to live replay timestamp"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          Sync
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (replayVideoRef.current) {
+                              if (!document.fullscreenElement) {
+                                replayVideoRef.current.requestFullscreen().catch(() => {});
+                              } else {
+                                document.exitFullscreen().catch(() => {});
+                              }
+                            }
+                          }}
+                          className="p-1.5 rounded-xl bg-black/70 hover:bg-black/90 text-white text-xs font-semibold flex items-center justify-center border border-white/20 transition-all cursor-pointer backdrop-blur-md"
+                          title="Toggle Fullscreen"
+                        >
+                          <Maximize className="w-3.5 h-3.5" />
+                        </button>
+                        {canManageLiveReplay && (
+                          <button
+                            type="button"
+                            onClick={handleEndReplayBroadcast}
+                            className="px-3 py-1.5 rounded-xl bg-red-600/90 hover:bg-red-600 text-white text-xs font-bold flex items-center gap-1.5 border border-white/20 transition-all cursor-pointer backdrop-blur-md shadow-lg"
+                            title="End live replay broadcast"
+                          >
+                            <Square className="w-3.5 h-3.5 fill-current" />
+                            End Live
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : liveSession ? (
+                    hasJoinedStream ? (
                       <div className="relative w-full h-full bg-black flex items-center justify-center">
                         <video
                           ref={(el) => {
@@ -1733,44 +2526,6 @@ export default function LivestreamPage() {
                           }}
                           className="w-full h-full object-contain"
                         />
-                        <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/90 text-white text-xs font-bold uppercase tracking-wider shadow-lg">
-                          <span className="w-2 h-2 rounded-full bg-white animate-ping" />
-                          {liveSession.broadcastType === "video" ? "LIVE VIDEO AUDIT: " : "LIVE: "}{liveSession.checkerName}
-                        </div>
-
-                        <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
-                          <button
-                            onClick={() => {
-                              if (viewerVideoRef.current) {
-                                if (!document.fullscreenElement) {
-                                  viewerVideoRef.current.requestFullscreen().catch(() => {});
-                                } else {
-                                  document.exitFullscreen().catch(() => {});
-                                }
-                              }
-                            }}
-                            className="p-1.5 rounded-xl bg-black/70 hover:bg-black/90 text-white text-xs font-semibold flex items-center justify-center border border-white/20 transition-all cursor-pointer backdrop-blur-md"
-                            title="Toggle Fullscreen"
-                          >
-                            <Maximize className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => reconnectViewerStream(true)}
-                            className="px-3 py-1.5 rounded-xl bg-black/70 hover:bg-black/90 text-white text-xs font-semibold flex items-center gap-1.5 border border-white/20 transition-all cursor-pointer backdrop-blur-md"
-                            title="Click if stream is buffering, frozen, or interrupted"
-                          >
-                            <RefreshCw className={`w-3.5 h-3.5 ${isConnectingStream ? "animate-spin" : ""}`} />
-                            Reload
-                          </button>
-                          <button
-                            onClick={handleLeaveStream}
-                            className="px-3 py-1.5 rounded-xl bg-red-600/85 hover:bg-red-600 text-white text-xs font-semibold flex items-center gap-1.5 border border-white/20 transition-all cursor-pointer backdrop-blur-md shadow-lg"
-                            title="Leave live stream"
-                          >
-                            <LogOut className="w-3.5 h-3.5" />
-                            Leave
-                          </button>
-                        </div>
 
                         {/* Connecting / Reconnecting Overlay */}
                         {(isConnectingStream || isStreamInterrupted) && (
@@ -1800,31 +2555,63 @@ export default function LivestreamPage() {
                           </div>
                         )}
 
-                        {/* Unmute / Audio Overlay Toggle */}
-                        <div className="absolute bottom-4 right-4 z-30 flex items-center gap-2">
+                        {/* Unmute & Viewer Player Controls */}
+                        <div className="absolute bottom-4 right-4 z-30 flex flex-wrap items-center justify-end gap-2">
                           <button
                             onClick={() => {
                               if (isViewerMuted) {
+                                setShowUnmuteHint(false);
                                 unmuteViewer();
                               } else {
                                 setIsViewerMuted(true);
                                 if (viewerVideoRef.current) viewerVideoRef.current.muted = true;
                               }
                             }}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-bold shadow-xl flex items-center gap-1.5 cursor-pointer border transition-all backdrop-blur-md ${
-                              isViewerMuted
-                                ? "bg-emerald-600 hover:bg-emerald-500 text-white border-white/20 animate-pulse"
-                                : "bg-black/70 hover:bg-black/90 text-white border-white/20"
+                            className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 cursor-pointer border transition-all duration-300 backdrop-blur-md ${
+                              isViewerMuted && showUnmuteHint
+                                ? "bg-emerald-600/45 hover:bg-emerald-600/80 text-white/90 border-white/15 opacity-75 hover:opacity-100 shadow-lg"
+                                : "bg-black/35 hover:bg-black/75 text-white/80 hover:text-white border-white/10 opacity-35 hover:opacity-100"
                             }`}
                           >
                             {isViewerMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-                            <span>{isViewerMuted ? "Click to Unmute / Hear 🔊" : "Mute Sound"}</span>
+                            <span>{isViewerMuted ? (showUnmuteHint ? "Click to Unmute" : "Unmute") : "Mute"}</span>
+                          </button>
+                          <button
+                            onClick={() => reconnectViewerStream(true)}
+                            className="px-3 py-1.5 rounded-xl bg-black/70 hover:bg-black/90 text-white text-xs font-semibold flex items-center gap-1.5 border border-white/20 transition-all cursor-pointer backdrop-blur-md"
+                            title="Click if stream is buffering, frozen, or interrupted"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${isConnectingStream ? "animate-spin" : ""}`} />
+                            Reload
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (viewerVideoRef.current) {
+                                if (!document.fullscreenElement) {
+                                  viewerVideoRef.current.requestFullscreen().catch(() => {});
+                                } else {
+                                  document.exitFullscreen().catch(() => {});
+                                }
+                              }
+                            }}
+                            className="p-1.5 rounded-xl bg-black/70 hover:bg-black/90 text-white text-xs font-semibold flex items-center justify-center border border-white/20 transition-all cursor-pointer backdrop-blur-md"
+                            title="Toggle Fullscreen"
+                          >
+                            <Maximize className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={handleLeaveStream}
+                            className="px-3 py-1.5 rounded-xl bg-red-600/85 hover:bg-red-600 text-white text-xs font-semibold flex items-center gap-1.5 border border-white/20 transition-all cursor-pointer backdrop-blur-md shadow-lg"
+                            title="Leave live stream"
+                          >
+                            <LogOut className="w-3.5 h-3.5" />
+                            Leave
                           </button>
                         </div>
                       </div>
                     ) : (
                       /* Live Broadcast In Progress - User Click to Join */
-                      <div className="relative w-full h-full bg-gradient-to-br from-[#060D14] via-[#0D1B2A] to-[#060D14] p-8 flex flex-col items-center justify-center text-center space-y-4">
+                      <div className="relative w-full h-full bg-gradient-to-br from-[#060D14] via-[#0D1B2A] to-[#060D14] px-8 pb-8 pt-24 flex flex-col items-center justify-center text-center space-y-4">
                         <div className="flex items-center gap-2 px-3 py-1 rounded-full bg-red-600/20 border border-red-500/40 text-red-400 text-xs font-bold uppercase tracking-wider">
                           <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
                           {liveSession.broadcastType === "video" ? "Live Video Audit Inspection in Progress" : "Live Quality Audit in Progress"}
@@ -1871,34 +2658,157 @@ export default function LivestreamPage() {
                       </div>
                     )
                   ) : (
-                    /* Standby / Offline Screen when no one is live */
-                    <div className="text-center p-8 space-y-4 max-w-md">
-                      <div className="w-16 h-16 rounded-2xl bg-black/40 border border-white/10 flex items-center justify-center mx-auto text-[#55f761]">
-                        <MonitorPlay className="w-8 h-8 opacity-70" />
+                    /* Standby / Offline Screen when no one is live — decompressed blurred banner backdrop */
+                    <div className="relative w-full h-full flex items-center justify-center p-6 sm:p-8 overflow-hidden bg-black">
+                      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                        <iframe
+                          ref={offlineBannerIframeRef}
+                          src={offlineBannerUrl}
+                          title="Offline Stream Banner"
+                          tabIndex={-1}
+                          frameBorder="0"
+                          allow="autoplay; encrypted-media"
+                          className="w-full h-full scale-110 blur-md opacity-55 pointer-events-none"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/45 to-black/80" />
                       </div>
-                      <div className="space-y-1">
-                        <h3 className="text-lg font-bold text-white">No Checker Currently Live</h3>
-                        <p className="text-xs text-white/60 leading-relaxed">
-                          When a checker begins a live screen review, their 1080p screen will automatically broadcast here in real time.
-                        </p>
+
+                      {/* Top hover zone: reveals Xfnite Live Check Lobby only when hovering at the top */}
+                      <div className="group/top-lobby absolute top-0 inset-x-0 z-20 h-28 flex items-start">
+                        <span className="absolute top-3 left-3 px-2.5 py-1 rounded-md bg-black/55 backdrop-blur-md text-white/90 text-[10px] font-bold uppercase tracking-wider border border-white/15 transition-opacity duration-200 group-hover/top-lobby:opacity-0 pointer-events-none">
+                          Offline
+                        </span>
+
+                        <div className="w-full px-4 pt-3.5 pb-6 pr-36 bg-gradient-to-b from-black/90 via-black/70 to-transparent flex items-center gap-3 opacity-0 -translate-y-2 group-hover/top-lobby:opacity-100 group-hover/top-lobby:translate-y-0 transition-all duration-300 ease-out pointer-events-none">
+                          <div className="relative shrink-0">
+                            <div className="w-10 h-10 rounded-full bg-white/10 text-[#55f761] flex items-center justify-center border border-white/15 backdrop-blur-md">
+                              <Radio className="w-4 h-4" />
+                            </div>
+                            <span className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 px-1.5 py-[1px] rounded bg-slate-700 text-white text-[8px] font-black uppercase tracking-wider">
+                              OFFLINE
+                            </span>
+                          </div>
+                          <div className="min-w-0">
+                            <h3 className="text-sm font-bold text-white truncate">
+                              Xfnite Live Check Lobby
+                            </h3>
+                            <p className="text-xs text-white/75 truncate">
+                              Chat stays open 24/7 even when no checker is live — ask audit questions or hang out.
+                            </p>
+                          </div>
+                        </div>
                       </div>
-                      <div className="pt-2 flex items-center justify-center">
-                        <button
-                          onClick={() => setActiveTab("vod")}
-                          className="px-5 py-2.5 bg-[#1F7A1F] dark:bg-[#55f761] hover:scale-105 active:scale-95 text-white dark:text-[#060D14] rounded-xl text-xs font-bold transition-all shadow-lg cursor-pointer flex items-center gap-2"
-                        >
-                          <Film className="w-4 h-4" />
-                          Browse Past Replays ({recordings.length})
-                        </button>
+
+                      {/* Subtle translucent frosted card so center text stays legible without overpowering the blurred banner */}
+                      <div className="relative z-10 text-center space-y-4 max-w-md w-full bg-black/25 backdrop-blur-md border border-white/10 rounded-2xl px-6 py-6 shadow-[0_8px_30px_rgba(0,0,0,0.28)]">
+                        <div className="w-14 h-14 rounded-2xl bg-black/25 border border-[#55f761]/25 flex items-center justify-center mx-auto text-[#55f761]">
+                          <MonitorPlay className="w-7 h-7 drop-shadow-[0_1px_6px_rgba(0,0,0,0.65)]" />
+                        </div>
+                        <div className="space-y-1.5">
+                          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-black/25 border border-white/10 text-[10px] font-bold uppercase tracking-wider text-white/80">
+                            <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                            Stream Offline
+                          </div>
+                          <h3 className="text-lg font-bold text-white tracking-tight drop-shadow-[0_1px_6px_rgba(0,0,0,0.75)]">No Checker Currently Live</h3>
+                          <p className="text-xs text-white/80 leading-relaxed drop-shadow-[0_1px_4px_rgba(0,0,0,0.75)]">
+                            When a checker begins a live screen review, their 1080p screen will automatically broadcast here in real time. Stream chat remains open!
+                          </p>
+                        </div>
+                        <div className="pt-1 flex flex-wrap items-center justify-center gap-2.5">
+                          <button
+                            onClick={() => setActiveTab("vod")}
+                            className="px-5 py-2.5 bg-[#1F7A1F] dark:bg-[#55f761] hover:scale-105 active:scale-95 text-white dark:text-[#060D14] rounded-xl text-xs font-bold transition-all shadow-lg cursor-pointer flex items-center gap-2"
+                          >
+                            <Film className="w-4 h-4" />
+                            Browse Past Replays ({recordings.length})
+                          </button>
+                          {isUserStaff && (
+                            <button
+                              onClick={() => setActiveTab("studio")}
+                              className="px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold border border-white/20 transition-all cursor-pointer flex items-center gap-2"
+                            >
+                              <ScreenShare className="w-4 h-4 text-[#55f761]" />
+                              Go Live in Studio
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )}
-                </div>
               </div>
           </div>
 
+          {/* Right Column: Twitch-Style Real-Time Stream Chat (Always active even when offline, smooth collapse/expand) */}
+          <div
+            aria-hidden={isChatCollapsed}
+            className={`relative overflow-hidden shrink-0 transition-[width,margin,opacity] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+              isChatCollapsed
+                ? "h-[480px] mt-4 lg:mt-0 lg:h-auto lg:w-0 lg:ml-0 lg:opacity-0 lg:pointer-events-none"
+                : "h-[480px] mt-4 lg:mt-0 lg:h-auto lg:w-[400px] xl:w-[440px] lg:ml-4 lg:opacity-100"
+            }`}
+          >
+            <div
+              className={`w-full h-full lg:w-[400px] xl:w-[440px] lg:absolute lg:top-0 lg:right-0 lg:bottom-0 transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                isChatCollapsed ? "lg:translate-x-8" : "lg:translate-x-0"
+              }`}
+            >
+              <LivestreamChat
+                messages={chatMessages}
+                currentUser={currentUser}
+                isConnected={isSocketConnected}
+                isLive={Boolean(liveSession || isCapturing)}
+                presenceCount={chatPresenceCount}
+                onSendMessage={handleSendChatMessage}
+                onEditMessage={handleEditChatMessage}
+                onDeleteMessage={handleDeleteChatMessage}
+                onCollapse={() => setIsChatCollapsed(true)}
+              />
+            </div>
+          </div>
+        </div>
+
         {/* Tab 2: VOD Library */}
         <div className={activeTab === "vod" ? "space-y-6" : "hidden"}>
+            {/* Active Live Replay Broadcast Banner */}
+            {liveSession?.broadcastType === "replay" && (
+              <div className="bg-red-500/10 dark:bg-red-500/10 border border-red-500/30 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 backdrop-blur-md">
+                <div className="flex items-center gap-3 min-w-0">
+                  <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600 text-white text-[10px] font-bold uppercase tracking-wider shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                    LIVE REPLAY
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-bold text-[#0D1B2A] dark:text-white truncate">
+                      {liveSession.title}
+                    </p>
+                    <p className="text-xs text-[#2F3E46]/70 dark:text-white/60 flex items-center gap-1.5">
+                      <Repeat className="w-3 h-3 text-[#1F7A1F] dark:text-[#55f761]" />
+                      Playing Loop {currentReplayLoop} / {liveSession.maxLoops || 1} &bull; Ends automatically after max loops
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("live")}
+                    className="px-3.5 py-1.5 rounded-xl bg-black/10 dark:bg-white/10 hover:bg-black/15 dark:hover:bg-white/15 text-[#0D1B2A] dark:text-white text-xs font-semibold transition-all cursor-pointer"
+                  >
+                    View Live
+                  </button>
+                  {canManageLiveReplay && (
+                    <button
+                      type="button"
+                      onClick={handleEndReplayBroadcast}
+                      className="px-3.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                    >
+                      <Square className="w-3.5 h-3.5 fill-current" />
+                      End Live
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Active Video Player (if selected) */}
             {selectedRecording && (
               <div className="space-y-3 bg-white/70 dark:bg-[#060D14]/70 backdrop-blur-md rounded-2xl border border-black/5 dark:border-white/10 p-4">
@@ -1907,7 +2817,7 @@ export default function LivestreamPage() {
                   title={selectedRecording.title}
                   autoPlay={true}
                 />
-                <div className="flex items-center justify-between px-2 pt-2">
+                <div className="flex flex-wrap items-center justify-between gap-3 px-2 pt-2">
                   <div>
                     <h3 className="text-base font-bold text-[#0D1B2A] dark:text-white">
                       {selectedRecording.title}
@@ -1916,10 +2826,33 @@ export default function LivestreamPage() {
                       Checked by {selectedRecording.checkerName} &bull; {new Date(selectedRecording.createdAt).toLocaleDateString()}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-[#1F7A1F] dark:text-[#55f761] border border-emerald-500/20">
                       {selectedRecording.projectType}
                     </span>
+                    {isUserStaff && (
+                      liveSession?.broadcastType === "replay" && liveSession?.replayRecordingId === selectedRecording.id && canManageLiveReplay ? (
+                        <button
+                          type="button"
+                          onClick={handleEndReplayBroadcast}
+                          className="px-3.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                        >
+                          <Square className="w-3.5 h-3.5 fill-current" />
+                          End Live ({currentReplayLoop}/{liveSession.maxLoops || 1})
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => openReplayBroadcastModal(selectedRecording)}
+                          disabled={isCapturing || isAnotherCheckerLive || isAnotherCheckerReserved}
+                          className="px-3.5 py-1.5 rounded-xl bg-[#1F7A1F] dark:bg-[#55f761] hover:opacity-90 disabled:opacity-40 text-white dark:text-[#060D14] text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                          title="Stream this replay video in Live with custom loop count"
+                        >
+                          <Radio className="w-3.5 h-3.5" />
+                          Play in Live
+                        </button>
+                      )
+                    )}
                     {canDeleteRecording(selectedRecording) && (
                       <button
                         onClick={(e) => openDeleteModal(selectedRecording.id, e)}
@@ -1937,8 +2870,11 @@ export default function LivestreamPage() {
             {/* Filter and Library List */}
             <div className="flex items-center justify-between pt-2">
               <div>
-                <h2 className="text-base font-semibold text-[#0D1B2A] dark:text-white">
-                  Recorded Project Audits & Past Streams
+                <h2 className="text-base font-semibold text-[#0D1B2A] dark:text-white flex items-center gap-2">
+                  <span>Recorded Project Audits &amp; Past Streams</span>
+                  <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-black/5 dark:bg-white/10 text-[#1F7A1F] dark:text-[#55f761] border border-black/5 dark:border-white/10">
+                    {recordings.length}
+                  </span>
                 </h2>
                 <p className="text-xs text-[#2F3E46]/70 dark:text-white/50">
                   Select a recorded check session to rewatch with resolution switching.
@@ -2036,13 +2972,41 @@ export default function LivestreamPage() {
                         </p>
                       </div>
 
-                      <div className="mt-4 pt-3 border-t border-black/5 dark:border-white/5 flex items-center justify-between text-xs">
+                      <div className="mt-4 pt-3 border-t border-black/5 dark:border-white/5 flex items-center justify-between gap-2 text-xs">
                         <span className="text-[#2F3E46]/60 dark:text-white/40 text-[11px]">
                           1080p &bull; 720p &bull; 360p
                         </span>
-                        <span className="text-xs font-semibold text-[#1F7A1F] dark:text-[#55f761] group-hover:underline">
-                          Watch Replay &rarr;
-                        </span>
+                        <div className="flex items-center gap-2">
+                          {isUserStaff && (
+                            liveSession?.broadcastType === "replay" && liveSession?.replayRecordingId === item.id && canManageLiveReplay ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEndReplayBroadcast();
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer"
+                              >
+                                <Square className="w-3 h-3 fill-current" />
+                                End Live
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={(e) => openReplayBroadcastModal(item, e)}
+                                disabled={isCapturing || isAnotherCheckerLive || isAnotherCheckerReserved}
+                                className="px-2.5 py-1 rounded-lg bg-[#1F7A1F]/10 dark:bg-[#55f761]/15 hover:bg-[#1F7A1F] dark:hover:bg-[#55f761] text-[#1F7A1F] dark:text-[#55f761] hover:text-white dark:hover:text-[#060D14] disabled:opacity-40 text-[11px] font-bold flex items-center gap-1 border border-[#1F7A1F]/25 dark:border-[#55f761]/30 transition-all cursor-pointer"
+                                title="Play this replay in Live Check"
+                              >
+                                <Radio className="w-3 h-3" />
+                                Play in Live
+                              </button>
+                            )
+                          )}
+                          <span className="text-xs font-semibold text-[#1F7A1F] dark:text-[#55f761] group-hover:underline">
+                            Watch &rarr;
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2130,147 +3094,149 @@ export default function LivestreamPage() {
                   </div>
                 </div>
 
-                {/* Studio Layout: Video Monitor + Metadata Controls */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                  {/* Live Video Monitor */}
-                  <div className="lg:col-span-2 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-[#2F3E46]/70 dark:text-white/50 block">
-                        {broadcastSource === "video"
-                          ? "Live Video Broadcast Monitor (Viewers see real-time playback)"
-                          : "Live Monitor Preview (What Viewers See in Real Time)"}
-                      </span>
-                      {broadcastSource === "video" && (
-                        <span className="text-[11px] text-emerald-600 dark:text-[#55f761] font-semibold flex items-center gap-1.5">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                          Real-time WebRTC feed synced
+                {/* Studio Layout: Video Monitor + Session Info on Left, Live Stream Chat on Right */}
+                <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_400px] xl:grid-cols-[minmax(0,1fr)_440px] gap-6 items-stretch">
+                  {/* Left Column: Live Video Monitor + Check Session Information */}
+                  <div className="space-y-5 min-w-0">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-[#2F3E46]/70 dark:text-white/50 block">
+                          {broadcastSource === "video"
+                            ? "Live Video Broadcast Monitor (Viewers see real-time playback)"
+                            : "Live Monitor Preview (What Viewers See in Real Time)"}
                         </span>
-                      )}
-                    </div>
+                        {broadcastSource === "video" && (
+                          <span className="text-[11px] text-emerald-600 dark:text-[#55f761] font-semibold flex items-center gap-1.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            Real-time WebRTC feed synced
+                          </span>
+                        )}
+                      </div>
 
-                    <div className="relative aspect-video w-full bg-black rounded-xl overflow-hidden border border-black/20 dark:border-white/20 shadow-inner flex items-center justify-center group">
-                      {broadcastSource === "video" ? (
-                        <>
+                      <div className="relative aspect-video w-full bg-black rounded-xl overflow-hidden border border-black/20 dark:border-white/20 shadow-inner flex items-center justify-center group">
+                        {broadcastSource === "video" ? (
+                          <>
+                            <video
+                              ref={broadcastVideoRef}
+                              src={uploadBlobUrl || undefined}
+                              playsInline
+                              onTimeUpdate={(e) => {
+                                setVideoCurrentTime(Math.round(e.currentTarget.currentTime));
+                              }}
+                              onEnded={finishVideoBroadcast}
+                              onPlay={() => setIsVideoPaused(false)}
+                              onPause={() => setIsVideoPaused(true)}
+                              className="w-full h-full object-contain"
+                            />
+                            {/* Play/Pause Overlay Toggle */}
+                            <button
+                              onClick={toggleVideoPlayPause}
+                              className="absolute inset-0 m-auto w-16 h-16 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-xl backdrop-blur-xs"
+                            >
+                              {isVideoPaused ? <Play className="w-7 h-7 fill-current ml-1" /> : <Pause className="w-7 h-7 fill-current" />}
+                            </button>
+                          </>
+                        ) : (
                           <video
-                            ref={broadcastVideoRef}
-                            src={uploadBlobUrl || undefined}
+                            ref={livePreviewRef}
+                            autoPlay
                             playsInline
-                            onTimeUpdate={(e) => {
-                              setVideoCurrentTime(Math.round(e.currentTarget.currentTime));
-                            }}
-                            onEnded={finishVideoBroadcast}
-                            onPlay={() => setIsVideoPaused(false)}
-                            onPause={() => setIsVideoPaused(true)}
+                            muted
                             className="w-full h-full object-contain"
                           />
-                          {/* Play/Pause Overlay Toggle */}
+                        )}
+                      </div>
+
+                      {/* Video Scrubber Controls for Video Broadcast */}
+                      {broadcastSource === "video" && (
+                        <div className="p-3 bg-black/5 dark:bg-white/5 rounded-xl border border-black/5 dark:border-white/5 flex items-center gap-2.5">
+                          {/* Previous 5s (Rewind) */}
                           <button
-                            onClick={toggleVideoPlayPause}
-                            className="absolute inset-0 m-auto w-16 h-16 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-xl backdrop-blur-xs"
+                            type="button"
+                            onClick={() => handleSeekRelative(-5)}
+                            className="px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-[#0D1B2A] dark:text-white hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0 flex items-center gap-1 border border-black/5 dark:border-white/10"
+                            title="Rewind 5 seconds (-5s) [Left Arrow]"
                           >
-                            {isVideoPaused ? <Play className="w-7 h-7 fill-current ml-1" /> : <Pause className="w-7 h-7 fill-current" />}
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span className="text-[11px] font-bold font-mono">-5s</span>
                           </button>
-                        </>
-                      ) : (
-                        <video
-                          ref={livePreviewRef}
-                          autoPlay
-                          playsInline
-                          muted
-                          className="w-full h-full object-contain"
-                        />
+
+                          {/* Play / Pause Toggle */}
+                          <button
+                            type="button"
+                            onClick={toggleVideoPlayPause}
+                            className="p-2 rounded-lg bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0 shadow-sm"
+                            title={isVideoPaused ? "Play [Space]" : "Pause [Space]"}
+                          >
+                            {isVideoPaused ? <Play className="w-4 h-4 fill-current ml-0.5" /> : <Pause className="w-4 h-4 fill-current" />}
+                          </button>
+
+                          {/* Next 5s (Forward) */}
+                          <button
+                            type="button"
+                            onClick={() => handleSeekRelative(5)}
+                            className="px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-[#0D1B2A] dark:text-white hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0 flex items-center gap-1 border border-black/5 dark:border-white/10"
+                            title="Forward 5 seconds (+5s) [Right Arrow]"
+                          >
+                            <span className="text-[11px] font-bold font-mono">+5s</span>
+                            <RotateCw className="w-3.5 h-3.5" />
+                          </button>
+
+                          <span className="font-mono text-xs text-[#0D1B2A] dark:text-white shrink-0">
+                            {formatTimer(videoCurrentTime)}
+                          </span>
+
+                          <input
+                            type="range"
+                            min="0"
+                            max={videoDuration || 100}
+                            value={videoCurrentTime}
+                            onChange={handleVideoSeek}
+                            className="w-full accent-[#1F7A1F] dark:accent-[#55f761] cursor-pointer"
+                          />
+
+                          <span className="font-mono text-xs text-[#2F3E46]/60 dark:text-white/50 shrink-0">
+                            {formatTimer(videoDuration)}
+                          </span>
+                        </div>
                       )}
                     </div>
 
-                    {/* Video Scrubber Controls for Video Broadcast */}
-                    {broadcastSource === "video" && (
-                      <div className="p-3 bg-black/5 dark:bg-white/5 rounded-xl border border-black/5 dark:border-white/5 flex items-center gap-2.5">
-                        {/* Previous 5s (Rewind) */}
-                        <button
-                          type="button"
-                          onClick={() => handleSeekRelative(-5)}
-                          className="px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-[#0D1B2A] dark:text-white hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0 flex items-center gap-1 border border-black/5 dark:border-white/10"
-                          title="Rewind 5 seconds (-5s) [Left Arrow]"
-                        >
-                          <RotateCcw className="w-3.5 h-3.5" />
-                          <span className="text-[11px] font-bold font-mono">-5s</span>
-                        </button>
+                    {/* Session Metadata Inputs (Below Monitor) */}
+                    <div className="p-4 rounded-2xl bg-black/[0.03] dark:bg-white/[0.03] border border-black/10 dark:border-white/10 space-y-3">
+                      <span className="text-xs font-semibold text-[#2F3E46]/70 dark:text-white/50 block">
+                        Check Session Information
+                      </span>
 
-                        {/* Play / Pause Toggle */}
-                        <button
-                          type="button"
-                          onClick={toggleVideoPlayPause}
-                          className="p-2 rounded-lg bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0 shadow-sm"
-                          title={isVideoPaused ? "Play [Space]" : "Pause [Space]"}
-                        >
-                          {isVideoPaused ? <Play className="w-4 h-4 fill-current ml-0.5" /> : <Pause className="w-4 h-4 fill-current" />}
-                        </button>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[11px] font-semibold text-[#0D1B2A] dark:text-white block mb-1">
+                            Session Title
+                          </label>
+                          <input
+                            type="text"
+                            value={sessionTitle}
+                            onChange={(e) => setSessionTitle(e.target.value)}
+                            placeholder="e.g. Standard Building Quality Audit - Batch #1"
+                            className="w-full px-3 py-2 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 text-xs text-[#0D1B2A] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#55f761]"
+                          />
+                        </div>
 
-                        {/* Next 5s (Forward) */}
-                        <button
-                          type="button"
-                          onClick={() => handleSeekRelative(5)}
-                          className="px-2.5 py-1.5 rounded-lg bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20 text-[#0D1B2A] dark:text-white hover:scale-105 active:scale-95 transition-all cursor-pointer shrink-0 flex items-center gap-1 border border-black/5 dark:border-white/10"
-                          title="Forward 5 seconds (+5s) [Right Arrow]"
-                        >
-                          <span className="text-[11px] font-bold font-mono">+5s</span>
-                          <RotateCw className="w-3.5 h-3.5" />
-                        </button>
-
-                        <span className="font-mono text-xs text-[#0D1B2A] dark:text-white shrink-0">
-                          {formatTimer(videoCurrentTime)}
-                        </span>
-
-                        <input
-                          type="range"
-                          min="0"
-                          max={videoDuration || 100}
-                          value={videoCurrentTime}
-                          onChange={handleVideoSeek}
-                          className="w-full accent-[#1F7A1F] dark:accent-[#55f761] cursor-pointer"
-                        />
-
-                        <span className="font-mono text-xs text-[#2F3E46]/60 dark:text-white/50 shrink-0">
-                          {formatTimer(videoDuration)}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Session Metadata Inputs */}
-                  <div className="space-y-4">
-                    <span className="text-xs font-semibold text-[#2F3E46]/70 dark:text-white/50 block">
-                      Check Session Information
-                    </span>
-
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-[11px] font-semibold text-[#0D1B2A] dark:text-white block mb-1">
-                          Session Title
-                        </label>
-                        <input
-                          type="text"
-                          value={sessionTitle}
-                          onChange={(e) => setSessionTitle(e.target.value)}
-                          placeholder="e.g. Standard Building Quality Audit - Batch #1"
-                          className="w-full px-3 py-2 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 text-xs text-[#0D1B2A] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#55f761]"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-[11px] font-semibold text-[#0D1B2A] dark:text-white block mb-1">
-                          Project Category
-                        </label>
-                        <select
-                          value={sessionProjectType}
-                          onChange={(e) => setSessionProjectType(e.target.value)}
-                          className="w-full px-3 py-2 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 text-xs text-[#0D1B2A] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#55f761]"
-                        >
-                          <option value="Standard Building" className="text-black">Standard Building</option>
-                          <option value="Transportation" className="text-black">Transportation &amp; Roads</option>
-                          <option value="Land Cover" className="text-black">Land Cover</option>
-                          <option value="Guidelines" className="text-black">Guidelines &amp; Common Mistakes</option>
-                        </select>
+                        <div>
+                          <label className="text-[11px] font-semibold text-[#0D1B2A] dark:text-white block mb-1">
+                            Project Category
+                          </label>
+                          <select
+                            value={sessionProjectType}
+                            onChange={(e) => setSessionProjectType(e.target.value)}
+                            className="w-full px-3 py-2 bg-black/5 dark:bg-white/5 rounded-xl border border-black/10 dark:border-white/10 text-xs text-[#0D1B2A] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#55f761]"
+                          >
+                            <option value="Standard Building" className="text-black">Standard Building</option>
+                            <option value="Transportation" className="text-black">Transportation &amp; Roads</option>
+                            <option value="Land Cover" className="text-black">Land Cover</option>
+                            <option value="Guidelines" className="text-black">Guidelines &amp; Common Mistakes</option>
+                          </select>
+                        </div>
                       </div>
 
                       <div>
@@ -2278,7 +3244,7 @@ export default function LivestreamPage() {
                           Notes / Description (Optional)
                         </label>
                         <textarea
-                          rows={3}
+                          rows={2}
                           value={sessionNotes}
                           onChange={(e) => setSessionNotes(e.target.value)}
                           placeholder="Key rules covered, common mistakes demonstrated..."
@@ -2310,6 +3276,22 @@ export default function LivestreamPage() {
                           </button>
                         </div>
                       )}
+                    </div>
+                  </div>
+
+                  {/* Right Column: Live Stream Chat so Checker can see & reply to viewers */}
+                  <div className="relative min-h-[440px] lg:min-h-0">
+                    <div className="h-[440px] lg:h-full lg:absolute lg:inset-0">
+                      <LivestreamChat
+                        messages={chatMessages}
+                        currentUser={currentUser}
+                        isConnected={isSocketConnected}
+                        isLive={Boolean(liveSession || isCapturing)}
+                        presenceCount={chatPresenceCount}
+                        onSendMessage={handleSendChatMessage}
+                        onEditMessage={handleEditChatMessage}
+                        onDeleteMessage={handleDeleteChatMessage}
+                      />
                     </div>
                   </div>
                 </div>
@@ -2768,6 +3750,180 @@ export default function LivestreamPage() {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Replay-to-Live Loop Setup Modal */}
+        {replayModalRecording && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+            onClick={() => {
+              if (!isStartingReplayLive) setReplayModalRecording(null);
+            }}
+          >
+            {/* Hidden video probe so recordings with missing DB durationSec report exact duration */}
+            <video
+              preload="metadata"
+              src={replayModalRecording.videoUrl}
+              onLoadedMetadata={(e) => {
+                const dur = e.currentTarget.duration;
+                if (dur && isFinite(dur) && dur > 0) {
+                  setReplayModalDurationSec(dur);
+                }
+              }}
+              className="hidden"
+            />
+            <div
+              className="w-full max-w-md bg-white dark:bg-[#0B121B] border border-black/10 dark:border-white/15 rounded-2xl p-6 shadow-2xl space-y-5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-[#1F7A1F] dark:text-[#55f761] text-[10px] font-bold uppercase tracking-wider border border-emerald-500/20">
+                    <Radio className="w-3 h-3" />
+                    Stream Replay to Live
+                  </div>
+                  <h3 className="text-base font-bold text-[#0D1B2A] dark:text-white">
+                    Configure Live Replay Loop
+                  </h3>
+                  <p className="text-xs text-[#2F3E46]/70 dark:text-white/55">
+                    Broadcast this Replay Library recording inside the Live Check room. You can end it anytime manually or let it stop once all loops finish.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!isStartingReplayLive) setReplayModalRecording(null);
+                  }}
+                  className="p-1.5 rounded-lg text-[#2F3E46]/60 dark:text-white/50 hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-[#0D1B2A] dark:text-white mb-1.5">
+                    Live Stream Title
+                  </label>
+                  <input
+                    type="text"
+                    value={replayBroadcastTitle}
+                    onChange={(e) => setReplayBroadcastTitle(e.target.value)}
+                    placeholder="Enter title shown in Live Check..."
+                    className="w-full px-3.5 py-2 rounded-xl bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 text-xs text-[#0D1B2A] dark:text-white focus:outline-none focus:ring-2 focus:ring-[#1F7A1F] dark:focus:ring-[#55f761]"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-semibold text-[#0D1B2A] dark:text-white flex items-center gap-1.5">
+                      <Repeat className="w-3.5 h-3.5 text-[#1F7A1F] dark:text-[#55f761]" />
+                      How Many Times to Loop
+                    </label>
+                    <span className="text-[11px] font-mono text-[#2F3E46]/60 dark:text-white/50">
+                      Max 50 loops
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-5 gap-1.5 mb-2.5">
+                    {[1, 2, 3, 5, 10].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => {
+                          setReplayLoopCount(preset);
+                          setReplayLoopInput(String(preset));
+                        }}
+                        className={`py-2 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                          replayLoopCount === preset
+                            ? "bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] border-transparent shadow-sm"
+                            : "bg-black/5 dark:bg-white/5 text-[#2F3E46] dark:text-white/75 border-black/5 dark:border-white/10 hover:bg-black/10 dark:hover:bg-white/10"
+                        }`}
+                      >
+                        {preset}&times;
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center gap-2.5">
+                    <span className="text-xs text-[#2F3E46]/70 dark:text-white/60 shrink-0">
+                      Custom loop count:
+                    </span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={replayLoopInput}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setReplayLoopInput(raw);
+                        const num = parseInt(raw, 10);
+                        if (Number.isFinite(num)) {
+                          setReplayLoopCount(Math.max(1, Math.min(50, num)));
+                        }
+                      }}
+                      onBlur={() => {
+                        const num = parseInt(replayLoopInput, 10);
+                        const clamped = Number.isFinite(num) ? Math.max(1, Math.min(50, num)) : 1;
+                        setReplayLoopCount(clamped);
+                        setReplayLoopInput(String(clamped));
+                      }}
+                      className="w-24 px-3 py-1.5 rounded-xl bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 text-xs font-mono font-bold text-[#0D1B2A] dark:text-white text-center focus:outline-none focus:ring-2 focus:ring-[#1F7A1F] dark:focus:ring-[#55f761]"
+                    />
+                    <span className="text-[11px] text-[#2F3E46]/60 dark:text-white/50">
+                      {replayLoopCount === 1 ? "(Plays once)" : `(Plays ${replayLoopCount} times)`}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/10 text-xs space-y-1">
+                  <div className="flex items-center justify-between text-[#2F3E46]/75 dark:text-white/70">
+                    <span>Video Duration</span>
+                    <span className="font-mono font-semibold text-[#0D1B2A] dark:text-white">
+                      {replayModalDurationSec > 0 ? formatTimer(Math.round(replayModalDurationSec)) : "Detecting..."}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[#2F3E46]/75 dark:text-white/70">
+                    <span>Total Auto-End Time ({replayLoopCount} {replayLoopCount === 1 ? "loop" : "loops"})</span>
+                    <span className="font-mono font-bold text-[#1F7A1F] dark:text-[#55f761]">
+                      {replayModalDurationSec > 0
+                        ? formatTimer(Math.round(replayModalDurationSec * replayLoopCount))
+                        : "Ends after max loops"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setReplayModalRecording(null)}
+                  disabled={isStartingReplayLive}
+                  className="px-4 py-2 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-black/10 dark:hover:bg-white/10 text-[#0D1B2A] dark:text-white text-xs font-semibold transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStartReplayBroadcast}
+                  disabled={isStartingReplayLive || isCapturing || isAnotherCheckerLive || isAnotherCheckerReserved}
+                  className="px-5 py-2 rounded-xl bg-[#1F7A1F] dark:bg-[#55f761] hover:opacity-90 disabled:opacity-50 text-white dark:text-[#060D14] text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
+                >
+                  {isStartingReplayLive ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      Starting Live...
+                    </>
+                  ) : (
+                    <>
+                      <Radio className="w-3.5 h-3.5" />
+                      Go Live ({replayLoopCount}&times; Loop)
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         )}
 

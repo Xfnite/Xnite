@@ -209,6 +209,10 @@ model Training {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
+// Real-time chat messages across role lounges, group/team rooms, and the
+// "livestream-chat" channel. Indexed by (chatType, createdAt) for fast
+// scrollback and scalable history pruning (30-day TTL + rolling cap on
+// high-volume channels like livestream-chat).
 model ChatMessage {
   id            String   @id @default(dbgenerated("gen_random_uuid()"))
   chatType      String
