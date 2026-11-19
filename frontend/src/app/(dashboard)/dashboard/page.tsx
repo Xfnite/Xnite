@@ -319,16 +319,6 @@ export default function OnboardingDashboardPage() {
         return;
       }
 
-      // If user has already completed onboarding/dashboard, redirect away from onboarding
-      if (user?.isDashboardCompleted && !isPreview) {
-        import("@/app/actions/auth").then(({ checkStandardBuildingPassedAction }) => {
-          checkStandardBuildingPassedAction().then((passed) => {
-            router.replace(passed ? "/project" : "/account");
-          });
-        });
-        return;
-      }
-
       if (user?.isRegistered) setIsRegistered(true);
       if (user?.email) setUserEmail(user.email);
       if (user?.onboardingProgress) setDbProgress(user.onboardingProgress);
