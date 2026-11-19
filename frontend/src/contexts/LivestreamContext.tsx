@@ -52,21 +52,20 @@ function getCookie(name: string): string | null {
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
+  { urls: "stun:stun1.l.google.com:19302" },
+  { urls: "stun:stun2.l.google.com:19302" },
+  { urls: "stun:stun3.l.google.com:19302" },
+  { urls: "stun:stun4.l.google.com:19302" },
   { urls: "stun:stun.cloudflare.com:3478" },
+  { urls: "stun:openrelay.metered.ca:80" },
   {
-    urls: "turn:openrelay.metered.ca:80",
-    username: "openrelay",
-    credential: "openrelay",
-  },
-  {
-    urls: "turn:openrelay.metered.ca:443",
-    username: "openrelay",
-    credential: "openrelay",
-  },
-  {
-    urls: "turn:openrelay.metered.ca:443?transport=tcp",
-    username: "openrelay",
-    credential: "openrelay",
+    urls: [
+      "turn:openrelay.metered.ca:80",
+      "turn:openrelay.metered.ca:443",
+      "turn:openrelay.metered.ca:443?transport=tcp",
+    ],
+    username: "openrelayproject",
+    credential: "openrelayproject",
   },
 ];
 
@@ -309,6 +308,27 @@ export function LivestreamProvider({
   const persistentBroadcastVideoRef = useRef<HTMLVideoElement | null>(null);
   const monitorGainRef = useRef<GainNode | null>(null);
   const mediaElementSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+
+  const isCapturingRef = useRef(false);
+  const broadcastSourceRef = useRef<"screen" | "video" | null>(null);
+  const sessionTitleRef = useRef("");
+  const sessionProjectTypeRef = useRef("Standard Building");
+
+  useEffect(() => {
+    isCapturingRef.current = isCapturing;
+  }, [isCapturing]);
+
+  useEffect(() => {
+    broadcastSourceRef.current = broadcastSource;
+  }, [broadcastSource]);
+
+  useEffect(() => {
+    sessionTitleRef.current = sessionTitle;
+  }, [sessionTitle]);
+
+  useEffect(() => {
+    sessionProjectTypeRef.current = sessionProjectType;
+  }, [sessionProjectType]);
 
   // Concurrency & Queue Guards
   const isAnotherCheckerLive = Boolean(
@@ -760,6 +780,13 @@ export function LivestreamProvider({
 
     socket.on("connect", () => {
       socket.emit("livestream:get_status");
+      if (isCapturingRef.current && broadcastSourceRef.current) {
+        socket.emit("livestream:checker_start", {
+          title: sessionTitleRef.current || "Live Inspection",
+          projectType: sessionProjectTypeRef.current || "Standard Building",
+          broadcastType: broadcastSourceRef.current,
+        });
+      }
       if (hasJoinedStreamRef.current) {
         console.log(
           "[Livestream Socket] Reconnected while watching. Re-joining room..."
@@ -791,7 +818,7 @@ export function LivestreamProvider({
     socket.on(
       "livestream:checker_reconnecting",
       ({ message }: { message?: string }) => {
-        if (hasJoinedStreamRef.current && !isCapturing) {
+        if (hasJoinedStreamRef.current && !isCapturingRef.current) {
           setIsConnectingStream(true);
           setIsStreamInterrupted(true);
           isStreamInterruptedRef.current = true;
@@ -969,7 +996,7 @@ export function LivestreamProvider({
       });
 
       if (
-        broadcastSource === "video" &&
+        broadcastSourceRef.current === "video" &&
         persistentBroadcastVideoRef.current &&
         !persistentBroadcastVideoRef.current.paused
       ) {
@@ -982,37 +1009,6 @@ export function LivestreamProvider({
         } catch {}
       }
 
-      // Prioritize hardware-accelerated VP8 and H264 codecs
-      try {
-        if (
-          "setCodecPreferences" in RTCRtpTransceiver.prototype &&
-          (window as any).RTCRtpReceiver?.getCapabilities
-        ) {
-          const transceivers = pc.getTransceivers();
-          const videoTransceiver = transceivers.find(
-            (t) => t.sender.track?.kind === "video"
-          );
-          if (videoTransceiver) {
-            const caps = (window as any).RTCRtpReceiver.getCapabilities("video");
-            if (caps?.codecs) {
-              const preferred = caps.codecs.filter(
-                (c: any) =>
-                  c.mimeType.toLowerCase() === "video/vp8" ||
-                  c.mimeType.toLowerCase() === "video/h264"
-              );
-              const rest = caps.codecs.filter(
-                (c: any) =>
-                  c.mimeType.toLowerCase() !== "video/vp8" &&
-                  c.mimeType.toLowerCase() !== "video/h264"
-              );
-              if (preferred.length > 0) {
-                videoTransceiver.setCodecPreferences([...preferred, ...rest]);
-              }
-            }
-          }
-        }
-      } catch {}
-
       pc.onicecandidate = (event) => {
         if (event.candidate) {
           socket.emit("livestream:signal", {
@@ -1023,30 +1019,10 @@ export function LivestreamProvider({
       };
 
       try {
-        let offer = await pc.createOffer({
+        const offer = await pc.createOffer({
           offerToReceiveAudio: false,
           offerToReceiveVideo: false,
         });
-
-        // Optimize SDP: Enable Opus in-band FEC and DTX safely
-        if (offer.sdp) {
-          let sdp = offer.sdp;
-          if (/a=fmtp:(\d+)/.test(sdp)) {
-            sdp = sdp.replace(/a=fmtp:(\d+)(.*)/g, (match, pt) => {
-              const isOpus = new RegExp(`a=rtpmap:${pt} opus/48000/2`).test(sdp);
-              if (isOpus) {
-                return `a=fmtp:${pt} minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=128000`;
-              }
-              return match;
-            });
-          } else {
-            sdp = sdp.replace(
-              /a=rtpmap:(\d+) opus\/48000\/2/g,
-              "a=rtpmap:$1 opus/48000/2\r\na=fmtp:$1 minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=128000"
-            );
-          }
-          offer = new RTCSessionDescription({ type: offer.type, sdp });
-        }
 
         await pc.setLocalDescription(offer);
         socket.emit("livestream:signal", {
@@ -1224,7 +1200,7 @@ export function LivestreamProvider({
       }
       socket.disconnect();
     };
-  }, [reconnectViewerStream, applyAdaptiveBitrate, broadcastSource, isCapturing]);
+  }, [reconnectViewerStream, applyAdaptiveBitrate]);
 
   // --- CHECKER: Screen Capture Broadcast ---
   const startScreenCapture = async () => {

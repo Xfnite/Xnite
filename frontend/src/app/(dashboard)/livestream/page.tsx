@@ -1282,13 +1282,33 @@ export default function LivestreamPage() {
                                   : "Re-establishing real-time audio and video feed."}
                               </p>
                             </div>
-                            <button
-                              onClick={() => reconnectViewerStream(true)}
-                              className="mt-1 px-4 py-2 rounded-xl bg-[#1F7A1F] dark:bg-[#55f761] hover:scale-105 active:scale-95 text-white dark:text-[#060D14] text-xs font-bold transition-all cursor-pointer shadow-lg flex items-center gap-1.5"
-                            >
-                              <RefreshCw className="w-3.5 h-3.5" />
-                              Reconnect Now
-                            </button>
+                            <div className="flex flex-wrap items-center justify-center gap-2 mt-1">
+                              <button
+                                onClick={() => reconnectViewerStream(true)}
+                                className="px-4 py-2 rounded-xl bg-[#1F7A1F] dark:bg-[#55f761] hover:scale-105 active:scale-95 text-white dark:text-[#060D14] text-xs font-bold transition-all cursor-pointer shadow-lg flex items-center gap-1.5"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                                Reconnect Now
+                              </button>
+                              {(effectiveUser?.role === "admin" ||
+                                (liveSession &&
+                                  effectiveUser?.email &&
+                                  liveSession.checkerEmail?.toLowerCase() ===
+                                    effectiveUser.email.toLowerCase())) && (
+                                <button
+                                  onClick={() => {
+                                    if (socketRef.current) {
+                                      socketRef.current.emit("livestream:checker_stop");
+                                      toast.info("Ending broadcast session...");
+                                    }
+                                  }}
+                                  className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold transition-all cursor-pointer shadow-lg flex items-center gap-1.5"
+                                >
+                                  <Square className="w-3.5 h-3.5 fill-current" />
+                                  End Broadcast
+                                </button>
+                              )}
+                            </div>
                           </div>
                         )}
 
@@ -2222,6 +2242,20 @@ export default function LivestreamPage() {
                             <strong>{liveSession.checkerName}</strong> is currently live. Only one audit broadcast can be active at a time.
                           </span>
                         </div>
+                        {effectiveUser?.role === "admin" && (
+                          <button
+                            onClick={() => {
+                              if (socketRef.current) {
+                                socketRef.current.emit("livestream:checker_stop");
+                                toast.info("Terminating active broadcast...");
+                              }
+                            }}
+                            className="w-full py-2 px-3 bg-red-600/15 hover:bg-red-600/25 border border-red-500/30 text-red-600 dark:text-red-400 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                          >
+                            <Square className="w-3.5 h-3.5 fill-current" />
+                            Admin: Terminate Current Live Session
+                          </button>
+                        )}
                         <button
                           onClick={handleJoinQueue}
                           disabled={isQueueActionLoading}
