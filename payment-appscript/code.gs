@@ -150,6 +150,59 @@ function parseCurrencyValue(rawValue) {
 }
 
 /**
+ * Strips URLs (like Google Drive links) and trailing separators from a cutoff string.
+ * e.g. "October 15 - October 30, 2026 Cutoff - https://drive.google.com/..." -> "October 15 - October 30, 2026 Cutoff"
+ */
+function cleanCutoffNote_(val) {
+    if (!val) return "";
+    let str = String(val).trim();
+    str = str.split('- Projects')[0].trim();
+    str = str.replace(/\s*[-–—:]*\s*https?:\/\/[^\s]+/gi, "").trim();
+    str = str.replace(/https?:\/\/[^\s]+/gi, "").trim();
+    str = str.replace(/[\s\-–—:]+$/, "").trim();
+    return str;
+}
+
+/**
+ * Normalizes cutoff strings for comparison (e.g. "October 15 - October 30, 2026 Cutoff" -> "october15october302026")
+ */
+function normalizeCutoffString_(str) {
+    return cleanCutoffNote_(str)
+        .toLowerCase()
+        .replace(/cutoff/gi, "")
+        .replace(/[^a-z0-9]/g, "")
+        .trim();
+}
+
+/**
+ * Checks if a record's _note1 matches the target cutoff (tolerant to URLs, formatting, and case).
+ */
+function isNote1Match_(recordNote1, targetCutoff) {
+    if (!recordNote1 || !targetCutoff) return false;
+    const cleanRec = normalizeCutoffString_(recordNote1);
+    const cleanTarget = normalizeCutoffString_(targetCutoff);
+    if (!cleanRec || !cleanTarget) return false;
+    return cleanRec === cleanTarget;
+}
+
+/**
+ * Reads cell T3 in the FINAL sheet, cleans any Drive link / URL, and auto-sanitizes cell T3 in the sheet.
+ */
+function getCleanT3Cutoff_(finalSheet) {
+    if (!finalSheet) return "";
+    const range = finalSheet.getRange("T3");
+    const rawVal = String(range.getValue() || "").trim();
+    const cleanVal = cleanCutoffNote_(rawVal);
+    // If cell T3 had a URL or extra characters, auto-clean the cell in the sheet
+    if (rawVal && cleanVal && rawVal !== cleanVal) {
+        try {
+            range.setValue(cleanVal);
+        } catch (e) { }
+    }
+    return cleanVal;
+}
+
+/**
  * Helper to get all emails from the X1.INNERCOUNCIL sheet.
  */
 function getInnerCouncilEmails(ss) {
@@ -233,7 +286,7 @@ function pullDataToClaimForm(isAuto = false) {
     const finalSheet = ss.getSheetByName("FINAL");
     if (!finalSheet) return ui.alert("Error: 'FINAL' sheet not found.");
 
-    const t3Value = String(finalSheet.getRange("T3").getValue()).trim();
+    const t3Value = getCleanT3Cutoff_(finalSheet);
     if (!t3Value) return ui.alert("Cutoff Error: T3 in the 'FINAL' sheet is empty.");
 
     const t3Encoded = encodeURIComponent(t3Value);
@@ -257,12 +310,11 @@ function pullDataToClaimForm(isAuto = false) {
         const dbUsers = JSON.parse(userRes.getContentText());
         let dbHistoryAll = JSON.parse(historyRes.getContentText());
         if (!Array.isArray(dbHistoryAll)) dbHistoryAll = [];
-        // Filter in-memory by _note1 === t3Value
-        // Filter in-memory by _note1 === t3Value, excluding referral bonus claims (handled by Claimform2)
+        // Filter in-memory by _note1 matching cutoff, excluding referral bonus claims (handled by Claimform2)
         let dbHistory = dbHistoryAll.filter(r => {
             const raw = r.rawComputation || {};
             if (String(raw.type || "").toLowerCase() === "referral_bonus") return false;
-            return String(raw._note1 || "").trim() === t3Value.trim();
+            return isNote1Match_(raw._note1, t3Value);
         });
 
         const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("ClaimForm1");
@@ -398,7 +450,7 @@ function pushSalaryToDatabase() {
     if (activeRow === 1) return ui.alert("Please select a user row.");
 
     const finalSheet = ss.getSheetByName("FINAL");
-    const t3Value = finalSheet ? String(finalSheet.getRange("T3").getValue()).trim() : "";
+    const t3Value = getCleanT3Cutoff_(finalSheet);
     if (!t3Value) return ui.alert("Missing T3 Cutoff value in FINAL sheet.");
 
     const emailHeaderName = (sheetName === "FINAL") ? "bitmappro Email login:" : "gingeremail";
@@ -506,7 +558,7 @@ function pushSalaryToDatabase() {
         const ihAll = JSON.parse(ihRes.getContentText());
         const ihData = ihAll.filter(r => {
             const rc = r.rawComputation || {};
-            return String(rc._note1 || "").trim() === t3Value.trim();
+            return isNote1Match_(rc._note1, t3Value);
         });
 
         let dbRecordId = null;
@@ -577,7 +629,7 @@ function executePushAll(enforceMinimum) {
     if (sheetName !== "FINAL" && !isCouncilTab) return ui.alert("Action Denied: Only for 'FINAL', 'X1.INNERCOUNCIL', or 'X1.LOWERCOUNCIL' tabs.");
 
     const finalSheet = ss.getSheetByName("FINAL");
-    const t3Value = finalSheet ? String(finalSheet.getRange("T3").getValue()).trim() : "";
+    const t3Value = getCleanT3Cutoff_(finalSheet);
     if (!t3Value) return ui.alert("Missing T3 Cutoff value in FINAL sheet.");
 
     const response = ui.alert(
@@ -642,7 +694,7 @@ function executePushAll(enforceMinimum) {
         const historyRes = UrlFetchApp.fetch(historyUrl, { "method": "GET", "headers": headers });
         const existingHistories = new Map(
             JSON.parse(historyRes.getContentText())
-                .filter(r => String((r.rawComputation || {})._note1 || "").trim() === t3Value.trim())
+                .filter(r => isNote1Match_((r.rawComputation || {})._note1, t3Value))
                 .map(i => [i.email.toLowerCase(), i])
         );
 
@@ -912,7 +964,7 @@ function executeForcePush(enforceMinimum) {
     if (sheetName !== "FINAL" && !isCouncilTab) return ui.alert("Action Denied: Only for 'FINAL', 'X1.INNERCOUNCIL', or 'X1.LOWERCOUNCIL' tabs.");
 
     const finalSheet = ss.getSheetByName("FINAL");
-    const t3Value = finalSheet ? String(finalSheet.getRange("T3").getValue()).trim() : "";
+    const t3Value = getCleanT3Cutoff_(finalSheet);
     if (!t3Value) return ui.alert("Missing T3 Cutoff value in FINAL sheet.");
 
     const response = ui.alert(
@@ -970,9 +1022,13 @@ function executeForcePush(enforceMinimum) {
         const incomeRes = UrlFetchApp.fetch(BASE_URL + "/CurrentIncome?select=id,email", { "method": "GET", "headers": headers });
         const existingIncomes = new Map(JSON.parse(incomeRes.getContentText()).map(i => [i.email.toLowerCase(), i]));
 
-        const historyUrl = BASE_URL + `/IncomeHistory?select=id,email&rawComputation-%3E%3E_note1=eq.${encodeURIComponent(t3Value)}`;
+        const historyUrl = BASE_URL + `/IncomeHistory?select=id,email,rawComputation`;
         const historyRes = UrlFetchApp.fetch(historyUrl, { "method": "GET", "headers": headers });
-        const existingHistories = new Map(JSON.parse(historyRes.getContentText()).map(i => [i.email.toLowerCase(), i]));
+        const existingHistories = new Map(
+            JSON.parse(historyRes.getContentText())
+                .filter(r => isNote1Match_((r.rawComputation || {})._note1, t3Value))
+                .map(i => [i.email.toLowerCase(), i])
+        );
 
         const rawComputationMap = getRawComputationDataMap();
         let n1 = t3Value;
@@ -1191,7 +1247,7 @@ function sendPayoutSentNotices_(baseUrl, headers, rows) {
     if (rows.length === 0) return 0;
     const messages = rows.map(r => {
         const amount = Number(r.amountPaid || 0).toLocaleString("en-PH", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-        const note = r.rawComputation && r.rawComputation._note1 ? String(r.rawComputation._note1).split("- Projects")[0].trim() : "";
+        const note = r.rawComputation && r.rawComputation._note1 ? cleanCutoffNote_(r.rawComputation._note1) : "";
         // e.g. "the August 30 - September 15, 2026 Cutoff", else the period dates
         const period = note ? `the ${note}` : [r.periodStart, r.periodEnd].filter(Boolean).map(d => new Date(d).toLocaleDateString("en-PH", { month: "short", day: "numeric", year: "numeric" })).join(" – ");
         return {
@@ -1483,17 +1539,6 @@ function onStatusEdit(e) {
                     }
                 }
             }
-            const notified = sendPayoutSentNotices_(BASE_URL, headersObj, Object.values(becomingSent));
-            e.source.toast(`Successfully updated DB to ${newStatus}${notified ? " and notified the member" : ""}`, "Success");
-        } else {
-            logSyncActivity("STATUS_CHANGE_FAIL", `Failed ID ${rowId}: ${patchRes.getContentText()}`);
-            e.source.toast(`Failed to update DB: ${patchRes.getContentText()}`, "Error");
-        }
-    } catch (err) {
-        logSyncActivity("STATUS_CHANGE_ERROR", err.toString());
-        e.source.toast("Error syncing to DB: " + err.toString(), "Error");
-    }
-}
             const notified = sendPayoutSentNotices_(BASE_URL, headersObj, Object.values(becomingSent));
             e.source.toast(`Successfully updated DB to ${newStatus}${notified ? " and notified the member" : ""}`, "Success");
         } else {

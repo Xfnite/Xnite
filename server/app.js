@@ -201,6 +201,8 @@ const httpServer = createServer(app);
 // Setup Socket.io
 const io = new Server(httpServer, {
   maxHttpBufferSize: 1e7, // 10MB to allow large bulk message payloads
+  pingInterval: 10000, // Ping clients every 10s
+  pingTimeout: 45000,  // Allow 45s before considering a throttled background tab disconnected
   cors: {
     origin: (origin, callback) => {
       if (isOriginAllowed(origin)) {
@@ -424,6 +426,10 @@ function clearLivestreamReplayTimer() {
 }
 
 function endActiveLivestreamSession(ioInstance) {
+  if (activeLivestreamSession && activeLivestreamSession.disconnectTimer) {
+    clearTimeout(activeLivestreamSession.disconnectTimer);
+    activeLivestreamSession.disconnectTimer = null;
+  }
   clearLivestreamReplayTimer();
   activeLivestreamSession = null;
   ioInstance.to("room:livestream").emit("livestream:ended");
@@ -516,7 +522,18 @@ function claimLivestreamSlot(socket, ioInstance) {
 function getPublicLivestreamState() {
   return {
     isLive: !!activeLivestreamSession,
-    session: activeLivestreamSession,
+    session: activeLivestreamSession
+      ? {
+          checkerSocketId: activeLivestreamSession.checkerSocketId,
+          checkerEmail: activeLivestreamSession.checkerEmail,
+          checkerName: activeLivestreamSession.checkerName,
+          title: activeLivestreamSession.title,
+          projectType: activeLivestreamSession.projectType,
+          broadcastType: activeLivestreamSession.broadcastType,
+          startedAt: activeLivestreamSession.startedAt,
+          isDisconnected: !!activeLivestreamSession.isDisconnected,
+        }
+      : null,
     queue: livestreamBroadcastQueue.map((item, idx) => ({
       position: idx + 1,
       email: item.email,
@@ -844,6 +861,23 @@ io.on("connection", (socket) => {
     activeConnections.set(socket.id, socket.user.email);
     broadcastOnlineCount(io);
     broadcastChatWidgetCount(io);
+
+    // Re-attach checker if they reconnected (e.g. background tab throttling, network hop, page refresh)
+    if (
+      activeLivestreamSession &&
+      activeLivestreamSession.checkerEmail &&
+      activeLivestreamSession.checkerEmail.toLowerCase() === socket.user.email.toLowerCase()
+    ) {
+      if (activeLivestreamSession.disconnectTimer) {
+        clearTimeout(activeLivestreamSession.disconnectTimer);
+        activeLivestreamSession.disconnectTimer = null;
+      }
+      activeLivestreamSession.isDisconnected = false;
+      activeLivestreamSession.checkerSocketId = socket.id;
+      console.log(`[Livestream] Checker ${socket.user.email} re-attached to live broadcast with socket ${socket.id}`);
+      broadcastLivestreamState(io);
+      io.to("room:livestream").emit("livestream:checker_reconnected");
+    }
   }
 
   // On connect, send current Jukebox state to the user
@@ -2164,7 +2198,26 @@ io.on("connection", (socket) => {
       activeLivestreamSession.checkerSocketId === socket.id &&
       activeLivestreamSession.broadcastType !== "replay"
     ) {
-      endActiveLivestreamSession(io);
+      console.log(`[Livestream] Active checker ${activeLivestreamSession.checkerEmail} socket disconnected (${socket.id}). Grace period (90s) started.`);
+      activeLivestreamSession.isDisconnected = true;
+      activeLivestreamSession.disconnectedAt = Date.now();
+
+      if (activeLivestreamSession.disconnectTimer) {
+        clearTimeout(activeLivestreamSession.disconnectTimer);
+      }
+
+      // Notify viewers that checker is temporarily disconnected/reconnecting
+      io.to("room:livestream").emit("livestream:checker_reconnecting", {
+        message: "Broadcaster connection paused. Waiting for reconnect...",
+      });
+
+      // Give 90-second grace period for background tab throttling, network hop, or page refresh
+      activeLivestreamSession.disconnectTimer = setTimeout(() => {
+        if (activeLivestreamSession && activeLivestreamSession.isDisconnected) {
+          console.log(`[Livestream] Checker grace period expired. Terminating stream.`);
+          endActiveLivestreamSession(io);
+        }
+      }, 90000);
     } else if (
       livestreamActiveReservation &&
       livestreamActiveReservation.socketId === socket.id

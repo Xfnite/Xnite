@@ -8,8 +8,7 @@ import { DEFAULT_SIDEBAR_BANNER_URL, normalizeBannerEmbedUrl } from "@/lib/banne
 import { resolveSocketUrl } from "@/lib/socketUrl";
 import { 
   getCheckRecordingsAction, 
-  getActiveLivestreamRoomAction,
-  deleteCheckRecordingAction
+  deleteCheckRecordingAction,
 } from "@/app/actions/livestream";
 import XfnitePlayer from "@/components/video/XfnitePlayer";
 import { ConfirmDeleteDialog } from "@/components/Attendance/ConfirmDeleteDialog";
@@ -19,44 +18,42 @@ import {
   LivestreamChatUser,
   formatChatSenderName,
 } from "@/components/Livestream/LivestreamChat";
+import { useLivestream } from "@/contexts/LivestreamContext";
 import { io, Socket } from "socket.io-client";
 import { 
   Radio, 
-  Video, 
   Upload, 
   Users, 
   Play, 
-  Pause,
+  Pause, 
   ScreenShare, 
   Film, 
-  Sparkles,
-  ExternalLink,
-  ShieldCheck,
-  Clock,
-  Square,
-  RefreshCw,
-  MonitorPlay,
-  Wifi,
-  WifiOff,
-  Mic,
-  MicOff,
-  Volume2,
-  VolumeX,
-  Maximize,
-  RotateCcw,
-  RotateCw,
-  Trash2,
-  Save,
-  Check,
-  LogOut,
-  AlertTriangle,
-  MessageSquare,
-  PanelRightOpen,
-  Repeat,
-  X,
-  ChevronUp,
-  ChevronDown,
-  Pin
+  Sparkles, 
+  ExternalLink, 
+  ShieldCheck, 
+  Clock, 
+  Square, 
+  RefreshCw, 
+  MonitorPlay, 
+  Wifi, 
+  WifiOff, 
+  Mic, 
+  MicOff, 
+  Volume2, 
+  VolumeX, 
+  Maximize, 
+  RotateCcw, 
+  RotateCw, 
+  Trash2, 
+  LogOut, 
+  AlertTriangle, 
+  MessageSquare, 
+  PanelRightOpen, 
+  Repeat, 
+  X, 
+  ChevronUp, 
+  ChevronDown, 
+  Pin 
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -93,29 +90,86 @@ function getCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-const ICE_SERVERS: RTCIceServer[] = [
-  { urls: "stun:stun.l.google.com:19302" },
-  { urls: "stun:stun.cloudflare.com:3478" },
-  {
-    urls: "turn:openrelay.metered.ca:80",
-    username: "openrelay",
-    credential: "openrelay",
-  },
-  {
-    urls: "turn:openrelay.metered.ca:443",
-    username: "openrelay",
-    credential: "openrelay",
-  },
-  {
-    urls: "turn:openrelay.metered.ca:443?transport=tcp",
-    username: "openrelay",
-    credential: "openrelay",
-  },
-];
-
 export default function LivestreamPage() {
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const {
+    currentUser,
+    liveSession,
+    liveViewerCount,
+    broadcastQueue,
+    reservedChecker,
+    isQueueActionLoading,
+    handleJoinQueue,
+    handleLeaveQueue,
+    isAnotherCheckerLive,
+    isMyTurn,
+    isAnotherCheckerReserved,
+    isQueued,
+    myQueuePosition,
+    hasJoinedStream,
+    isConnectingStream,
+    isStreamInterrupted,
+    isNetworkOffline,
+    remoteStream,
+    isViewerMuted,
+    setIsViewerMuted,
+    unmuteViewer,
+    toggleViewerMute,
+    handleJoinStream,
+    handleLeaveStream,
+    reconnectViewerStream,
+    networkHealth,
+    isSlowConnection,
+    isVideoBuffering,
+    setIsVideoBuffering,
+    networkStats,
+    isCapturing,
+    broadcastSource,
+    broadcasterStream,
+    recordingSeconds,
+    sessionTitle,
+    setSessionTitle,
+    sessionProjectType,
+    setSessionProjectType,
+    sessionNotes,
+    setSessionNotes,
+    isMicEnabled,
+    toggleCheckerMic,
+    startScreenCapture,
+    finishScreenCapture,
+    discardCapture,
+    uploadFile,
+    uploadBlobUrl,
+    uploadTitle,
+    setUploadTitle,
+    uploadProjectType,
+    setUploadProjectType,
+    uploadNotes,
+    setUploadNotes,
+    handleFileSelected,
+    startVideoBroadcast,
+    finishVideoBroadcast,
+    discardVideoBroadcast,
+    videoDuration,
+    videoCurrentTime,
+    isVideoPaused,
+    isMonitorAudioMuted,
+    toggleVideoPlayPause,
+    handleVideoSeek,
+    handleSeekRelative,
+    toggleMonitorAudio,
+    isReviewing,
+    setIsReviewing,
+    recordedBlob,
+    recordedBlobUrl,
+    recordedDuration,
+    isUploading,
+    handlePublishRecording,
+    handleDiscardRecording,
+    handlePublishVideoFile,
+    handleDiscardVideoBroadcast,
+    formatTimer,
+  } = useLivestream();
+
   const [activeTab, setActiveTab] = useState<"live" | "vod" | "studio">("live");
 
   // Replay Library State
@@ -123,37 +177,9 @@ export default function LivestreamPage() {
   const [selectedRecording, setSelectedRecording] = useState<any>(null);
   const [selectedFilter, setSelectedFilter] = useState("All");
 
-  // In-Browser Recording Studio State (Checker)
-  const [isCapturing, setIsCapturing] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const [isUploading, setIsUploading] = useState(false);
-  const [sessionTitle, setSessionTitle] = useState("");
-  const [sessionProjectType, setSessionProjectType] = useState("Standard Building");
-  const [sessionNotes, setSessionNotes] = useState("");
-
-  // Post-Recording Review & Confirmation State
-  const [isReviewing, setIsReviewing] = useState(false);
-  const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
-  const [recordedBlobUrl, setRecordedBlobUrl] = useState<string | null>(null);
-  const [recordedDuration, setRecordedDuration] = useState<number>(0);
-
   // Delete Recording Confirmation Modal State
   const [recordingToDelete, setRecordingToDelete] = useState<string | null>(null);
   const [isDeletingRecording, setIsDeletingRecording] = useState(false);
-
-  // Live Screen Share & WebRTC state (Viewer & Checker)
-  const [liveSession, setLiveSession] = useState<any>(null);
-  const [liveViewerCount, setLiveViewerCount] = useState<number>(0);
-  const [broadcasterStream, setBroadcasterStream] = useState<MediaStream | null>(null);
-  const [isViewerMuted, setIsViewerMuted] = useState(true);
-  const [isMicEnabled, setIsMicEnabled] = useState(true);
-  const [hasJoinedStream, setHasJoinedStream] = useState(false);
-  const [isConnectingStream, setIsConnectingStream] = useState(false);
-  const [isStreamInterrupted, setIsStreamInterrupted] = useState(false);
-  const [isNetworkOffline, setIsNetworkOffline] = useState(false);
-  const hasJoinedStreamRef = useRef(false);
-  const isStreamInterruptedRef = useRef(false);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Twitch-style Stream Chat state (active both during live & offline lobby)
   const [chatMessages, setChatMessages] = useState<LivestreamChatMessage[]>([]);
@@ -167,7 +193,6 @@ export default function LivestreamPage() {
   const [uptimeTickMs, setUptimeTickMs] = useState(() => Date.now());
   const currentUserRef = useRef<LivestreamChatUser | null>(null);
   const isChatCollapsedRef = useRef(false);
-  const activeBroadcastMetaRef = useRef<{ title: string; projectType: string; broadcastType: string } | null>(null);
   const [offlineBannerUrl, setOfflineBannerUrl] = useState(DEFAULT_SIDEBAR_BANNER_URL);
   const offlineBannerIframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -183,223 +208,24 @@ export default function LivestreamPage() {
   const replayVideoRef = useRef<HTMLVideoElement | null>(null);
   const replaySyncedSessionIdRef = useRef<string | null>(null);
 
-  // Livestream Queue & Reservation State
-  const [broadcastQueue, setBroadcastQueue] = useState<
-    Array<{ position: number; email: string; name: string; role?: string; queuedAt?: string }>
-  >([]);
-  const [reservedChecker, setReservedChecker] = useState<{
-    email: string;
-    name: string;
-    role?: string;
-    expiresAt: number;
-  } | null>(null);
-  const [isQueueActionLoading, setIsQueueActionLoading] = useState(false);
-
-  // Concurrency & Queue Guards
-  const isAnotherCheckerLive = Boolean(
-    liveSession && (!currentUser || liveSession.checkerEmail?.toLowerCase() !== currentUser.email?.toLowerCase())
-  );
-  const isMyTurn = Boolean(
-    reservedChecker && currentUser && reservedChecker.email?.toLowerCase() === currentUser.email?.toLowerCase()
-  );
-  const isAnotherCheckerReserved = Boolean(
-    reservedChecker && (!currentUser || reservedChecker.email?.toLowerCase() !== currentUser.email?.toLowerCase())
-  );
-  const myQueueItem = broadcastQueue.find(
-    (item) => currentUser && item.email?.toLowerCase() === currentUser.email?.toLowerCase()
-  );
-  const isQueued = Boolean(myQueueItem);
-  const myQueuePosition = myQueueItem?.position || 0;
-
-  // Refs for media stream & recording
-  const livePreviewRef = useRef<HTMLVideoElement>(null);
-  const viewerVideoRef = useRef<HTMLVideoElement>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const screenStreamRef = useRef<MediaStream | null>(null);
-  const micStreamRef = useRef<MediaStream | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const remoteStreamRef = useRef<MediaStream | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordedChunksRef = useRef<Blob[]>([]);
-  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const recordingStartTimeRef = useRef<number>(0);
-
-  const unmuteViewer = () => {
-    setIsViewerMuted(false);
-    if (viewerVideoRef.current) {
-      viewerVideoRef.current.muted = false;
-      viewerVideoRef.current.volume = 1;
-      viewerVideoRef.current.play().catch(() => {});
-    }
-  };
-
-  const toggleCheckerMic = () => {
-    if (micStreamRef.current) {
-      const audioTrack = micStreamRef.current.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = !audioTrack.enabled;
-        setIsMicEnabled(audioTrack.enabled);
-        toast.info(audioTrack.enabled ? "Microphone active 🎙️" : "Microphone muted 🔇");
-      }
-    }
-  };
-
-  // WebRTC Peer Connections
-  const socketRef = useRef<Socket | null>(null);
-  const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map()); // For Checker: viewerSocketId -> RTCPeerConnection
-  const viewerPeerConnectionRef = useRef<RTCPeerConnection | null>(null); // For Viewer
-  const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map()); // Checker buffer: viewerSocketId -> candidates
-  const viewerPendingCandidatesRef = useRef<RTCIceCandidateInit[]>([]); // Viewer buffer: candidates before remoteDescription
-
-  // Manual File Upload & Video Broadcast State
-  const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadBlobUrl, setUploadBlobUrl] = useState<string | null>(null);
-  const [uploadTitle, setUploadTitle] = useState("");
-  const [uploadProjectType, setUploadProjectType] = useState("Standard Building");
-  const [uploadNotes, setUploadNotes] = useState("");
-  const [broadcastSource, setBroadcastSource] = useState<"screen" | "video" | null>(null);
+  // Settings
   const [saveToLibraryAfterStream, setSaveToLibraryAfterStream] = useState<boolean>(true);
-  const [videoDuration, setVideoDuration] = useState<number>(0);
-  const [videoCurrentTime, setVideoCurrentTime] = useState<number>(0);
-  const [isVideoPaused, setIsVideoPaused] = useState<boolean>(false);
-  const [isMonitorAudioMuted, setIsMonitorAudioMuted] = useState<boolean>(false);
 
-  const broadcastVideoRef = useRef<HTMLVideoElement | null>(null);
-  const monitorGainRef = useRef<GainNode | null>(null);
-  const mediaElementSourceRef = useRef<MediaElementAudioSourceNode | null>(null);
+  // Video element refs
+  const viewerVideoRef = useRef<HTMLVideoElement>(null);
+  const livePreviewRef = useRef<HTMLVideoElement>(null);
+  const socketRef = useRef<Socket | null>(null);
 
-  // Keep Checker preview attached whenever screen capturing changes
   useEffect(() => {
-    if (isCapturing && broadcastSource === "screen" && livePreviewRef.current) {
-      livePreviewRef.current.muted = true;
-      livePreviewRef.current.defaultMuted = true;
-      const stream = screenStreamRef.current || mediaStreamRef.current;
-      if (stream) {
-        livePreviewRef.current.srcObject = stream;
-        livePreviewRef.current.play().catch(() => {});
-      }
-    }
-  }, [isCapturing, broadcastSource]);
-
-  // Viewer manually joins live stream
-  const handleJoinStream = () => {
-    if (!socketRef.current) return;
-    setIsConnectingStream(true);
-    setIsStreamInterrupted(false);
-    isStreamInterruptedRef.current = false;
-    setHasJoinedStream(true);
-    hasJoinedStreamRef.current = true;
-    socketRef.current.emit("livestream:join_room");
-    toast.info("Connecting to live audit inspection...");
-  };
-
-  // Reconnects live stream (e.g. after network drop, socket reconnect, or manual reload)
-  const reconnectViewerStream = (showToast = true) => {
-    if (!socketRef.current || !hasJoinedStreamRef.current) return;
-    setIsConnectingStream(true);
-    setIsStreamInterrupted(true);
-    isStreamInterruptedRef.current = true;
-
-    if (showToast) {
-      toast.info("Reconnecting live stream feed...");
-    }
-
-    if (viewerPeerConnectionRef.current) {
-      try {
-        viewerPeerConnectionRef.current.close();
-      } catch {}
-      viewerPeerConnectionRef.current = null;
-    }
-
-    remoteStreamRef.current = null;
-    if (viewerVideoRef.current) {
-      viewerVideoRef.current.srcObject = null;
-    }
-    viewerPendingCandidatesRef.current = [];
-
-    socketRef.current.emit("livestream:join_room");
-  };
-
-  // Viewer leaves live stream
-  const handleLeaveStream = () => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
-    if (socketRef.current) {
-      socketRef.current.emit("livestream:leave_room");
-    }
-    if (viewerPeerConnectionRef.current) {
-      try {
-        viewerPeerConnectionRef.current.close();
-      } catch {}
-      viewerPeerConnectionRef.current = null;
-    }
-    viewerPendingCandidatesRef.current = [];
-    remoteStreamRef.current = null;
-    if (viewerVideoRef.current) {
-      viewerVideoRef.current.srcObject = null;
-    }
-    setHasJoinedStream(false);
-    hasJoinedStreamRef.current = false;
-    setIsConnectingStream(false);
-    setIsStreamInterrupted(false);
-    isStreamInterruptedRef.current = false;
-    toast.info("Left live stream.");
-  };
-
-  // Checker joins broadcast queue when another checker is broadcasting
-  const handleJoinQueue = () => {
-    if (!socketRef.current) return;
-    setIsQueueActionLoading(true);
-    socketRef.current.emit("livestream:queue_join");
-  };
-
-  // Checker leaves broadcast queue
-  const handleLeaveQueue = () => {
-    if (!socketRef.current) return;
-    setIsQueueActionLoading(true);
-    socketRef.current.emit("livestream:queue_leave");
-  };
-
-  // Automatically disconnect from live stream if viewer switches away from "live" tab (broadcasters stay connected)
-  useEffect(() => {
-    if (activeTab !== "live" && hasJoinedStream && !isCapturing) {
-      handleLeaveStream();
-    }
-  }, [activeTab, hasJoinedStream, isCapturing]);
-
-  // Browser network status listeners to handle lost internet and automatic reconnection
-  useEffect(() => {
-    const handleOffline = () => {
-      setIsNetworkOffline(true);
-      if (hasJoinedStreamRef.current) {
-        setIsStreamInterrupted(true);
-        isStreamInterruptedRef.current = true;
-      }
-    };
-
-    const handleOnline = () => {
-      setIsNetworkOffline(false);
-      if (hasJoinedStreamRef.current) {
-        if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = setTimeout(() => {
-          reconnectViewerStream(true);
-        }, 800);
-      }
-    };
-
-    window.addEventListener("offline", handleOffline);
-    window.addEventListener("online", handleOnline);
-    return () => {
-      window.removeEventListener("offline", handleOffline);
-      window.removeEventListener("online", handleOnline);
-    };
-  }, []);
-
-  // Keep refs synced for socket listeners
-  useEffect(() => {
-    currentUserRef.current = currentUser;
+    currentUserRef.current = currentUser
+      ? {
+          name: currentUser.name || "Member",
+          email: currentUser.email || "",
+          role: currentUser.role || "",
+          firstName: currentUser.firstName,
+          lastName: currentUser.lastName,
+        }
+      : null;
   }, [currentUser]);
 
   useEffect(() => {
@@ -442,571 +268,110 @@ export default function LivestreamPage() {
 
       socket.on("connect", () => {
         setIsSocketConnected(true);
-        socket.emit("livestream:get_status");
         socket.emit("join_room", { chatType: LIVESTREAM_CHAT_TYPE });
         socket.emit("get_room_history", { chatType: LIVESTREAM_CHAT_TYPE });
-        if (activeBroadcastMetaRef.current) {
-          socket.emit("livestream:checker_start", activeBroadcastMetaRef.current);
-        }
-        // If the viewer was watching the stream, automatically re-join the room upon reconnect
-        if (hasJoinedStreamRef.current) {
-          console.log("[Livestream Socket] Reconnected while watching. Re-joining room...");
-          reconnectViewerStream(false);
+      });
+
+      socket.on("disconnect", () => {
+        setIsSocketConnected(false);
+      });
+
+      socket.on("room_history", ({ chatType, messages }: { chatType: string; messages: any[] }) => {
+        if (chatType !== LIVESTREAM_CHAT_TYPE || !Array.isArray(messages)) return;
+        setChatMessages(
+          messages
+            .map((m) => ({ ...m, createdAt: new Date(m.createdAt) }))
+            .slice(-MAX_CHAT_DISPLAY_MESSAGES)
+        );
+      });
+
+      socket.on("new_message", ({ chatType, message }: { chatType: string; message: any }) => {
+        if (chatType !== LIVESTREAM_CHAT_TYPE || !message) return;
+        const formatted: LivestreamChatMessage = {
+          ...message,
+          createdAt: new Date(message.createdAt),
+        };
+        const myEmail = (currentUserRef.current?.email || "").trim().toLowerCase();
+        const isFromMe = Boolean(
+          myEmail && message.senderEmail && message.senderEmail.trim().toLowerCase() === myEmail
+        );
+
+        setChatMessages((prev) => {
+          if (prev.some((m) => m.id === formatted.id)) return prev;
+          const filtered = isFromMe
+            ? prev.filter((m) => !(m.id.startsWith("temp-") && m.text.trim() === formatted.text.trim()))
+            : prev;
+          return [...filtered, formatted].slice(-MAX_CHAT_DISPLAY_MESSAGES);
+        });
+
+        if (!isFromMe && isChatCollapsedRef.current) {
+          setUnreadChatCount((c) => c + 1);
         }
       });
 
-    socket.on("disconnect", (reason) => {
-      console.warn("[Livestream Socket] Connection lost:", reason);
-      setIsSocketConnected(false);
-      if (hasJoinedStreamRef.current) {
-        setIsConnectingStream(true);
-        setIsStreamInterrupted(true);
-        isStreamInterruptedRef.current = true;
-      }
-    });
+      socket.on("message_edited", ({ chatType, message }: { chatType: string; message: any }) => {
+        if (chatType !== LIVESTREAM_CHAT_TYPE || !message) return;
+        const formatted: LivestreamChatMessage = {
+          ...message,
+          createdAt: new Date(message.createdAt),
+        };
+        setChatMessages((prev) => prev.map((m) => (m.id === formatted.id ? formatted : m)));
+      });
 
-    socket.on("connect_error", (err) => {
-      console.warn("[Livestream Socket] Connection error:", err.message);
-    });
+      socket.on("message_deleted", ({ chatType, message }: { chatType: string; message: any }) => {
+        if (chatType !== LIVESTREAM_CHAT_TYPE || !message) return;
+        const formatted: LivestreamChatMessage = {
+          ...message,
+          createdAt: new Date(message.createdAt),
+        };
+        setChatMessages((prev) => prev.map((m) => (m.id === formatted.id ? formatted : m)));
+      });
 
-    socket.on("livestream:stream_available", () => {
-      socket.emit("livestream:get_status");
-      toast.info("A live audit broadcast has started!");
-    });
+      socket.on("message_removed", ({ chatType, messageId }: { chatType: string; messageId: string }) => {
+        if (chatType !== LIVESTREAM_CHAT_TYPE || !messageId) return;
+        setChatMessages((prev) => prev.filter((m) => m.id !== messageId));
+      });
 
-    socket.on("livestream:status_update", ({ isLive, session, queue, reservedChecker: reserved }: any) => {
-      window.dispatchEvent(
-        new CustomEvent("livestream_status_changed", { detail: { isLive: Boolean(isLive && session) } })
-      );
-      if (isLive && session) {
-        setLiveSession(session);
-      } else {
-        setLiveSession(null);
-        remoteStreamRef.current = null;
-        if (viewerVideoRef.current) viewerVideoRef.current.srcObject = null;
-        setHasJoinedStream(false);
-        hasJoinedStreamRef.current = false;
-        setIsConnectingStream(false);
-        setIsStreamInterrupted(false);
-        isStreamInterruptedRef.current = false;
+      socket.on("livestream_chat_cleared", ({ clearedBy }: { clearedBy?: string }) => {
+        setChatMessages([]);
+        setUnreadChatCount(0);
+        toast.info(`Stream chat was cleared${clearedBy ? ` by ${clearedBy}` : ""}.`);
+      });
+
+      socket.on("livestream_chat:presence", (count: number) => {
+        if (typeof count === "number") {
+          setChatPresenceCount(count);
+        }
+      });
+
+      socket.on("livestream:replay_started", ({ session }: { session: ReplayLiveSessionPayload }) => {
+        setIsStartingReplayLive(false);
+        setReplayModalRecording(null);
         currentReplayLoopRef.current = 1;
         setCurrentReplayLoop(1);
         replaySyncedSessionIdRef.current = null;
-      }
-      if (Array.isArray(queue)) {
-        setBroadcastQueue(queue);
-      }
-      setReservedChecker(reserved || null);
-    });
-
-    socket.on("livestream:replay_started", ({ session }: { session: ReplayLiveSessionPayload }) => {
-      setIsStartingReplayLive(false);
-      setReplayModalRecording(null);
-      if (session) {
-        setLiveSession(session);
-      }
-      currentReplayLoopRef.current = 1;
-      setCurrentReplayLoop(1);
-      replaySyncedSessionIdRef.current = null;
-      setActiveTab("live");
-      const loops = Number(session?.maxLoops || 1);
-      toast.success(`Replay is now playing live (${loops} ${loops === 1 ? "loop" : "loops"}).`);
-    });
-
-    socket.on("livestream:replay_error", ({ message }: { message?: string }) => {
-      setIsStartingReplayLive(false);
-      toast.error(message || "Unable to start live replay broadcast.");
-    });
-
-    socket.on("livestream:your_turn", ({ message }: { expiresAt: number; message?: string }) => {
-      toast.success(message || "🎉 It's your turn to broadcast! You now have reserved broadcast access.", {
-        duration: 12000,
-      });
-    });
-
-    socket.on("livestream:queue_joined", ({ position }: { position: number }) => {
-      setIsQueueActionLoading(false);
-      toast.success(`Joined queue! You are #${position} in line to broadcast.`);
-    });
-
-    socket.on("livestream:queue_left", () => {
-      setIsQueueActionLoading(false);
-      toast.info("You left the broadcast queue.");
-    });
-
-    socket.on("livestream:queue_error", ({ message }: { message: string }) => {
-      setIsQueueActionLoading(false);
-      toast.error(message || "Queue action failed.");
-    });
-
-    socket.on("livestream:viewer_count", (count: number) => {
-      setLiveViewerCount(() => {
-        const activePeers = peerConnectionsRef.current.size;
-        return Math.max(count, activePeers);
-      });
-    });
-
-    socket.on("livestream:checker_busy", ({ message }: { message: string }) => {
-      setIsStartingReplayLive(false);
-      toast.error(message || "Another checker is currently live. Only one broadcast can be active at a time.");
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-        mediaStreamRef.current = null;
-      }
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-        mediaRecorderRef.current.stop();
-      }
-      if (timerIntervalRef.current) {
-        clearInterval(timerIntervalRef.current);
-        timerIntervalRef.current = null;
-      }
-      setIsCapturing(false);
-      setRecordingSeconds(0);
-    });
-
-    // Dynamic adaptive bitrate budgeting:
-    // Prevents checker's upload pipe from saturating when multiple viewers watch.
-    // 1 viewer: 2.2 Mbps, 2 viewers: 1.6 Mbps each, 3-4: 1.2 Mbps each, 5+: 800 kbps each
-    const applyAdaptiveBitrate = () => {
-      const activePeers = peerConnectionsRef.current.size;
-      const targetBitrate = Math.max(
-        800_000,
-        Math.min(2_200_000, Math.floor(4_800_000 / Math.max(1, activePeers)))
-      );
-
-      peerConnectionsRef.current.forEach((peer) => {
-        peer.getSenders().forEach((s) => {
-          if (s.track?.kind === "video") {
-            try {
-              const params = s.getParameters();
-              if (params.encodings && params.encodings.length > 0) {
-                params.encodings[0].maxBitrate = targetBitrate;
-                params.encodings[0].maxFramerate = 30;
-                params.degradationPreference = "maintain-framerate";
-
-                const vWidth = broadcastVideoRef.current?.videoWidth || 1920;
-                if (vWidth > 1920) {
-                  params.encodings[0].scaleResolutionDownBy = +(vWidth / 1920).toFixed(2);
-                } else {
-                  params.encodings[0].scaleResolutionDownBy = 1;
-                }
-
-                s.setParameters(params).catch(() => {});
-              }
-            } catch {}
-          }
-        });
-      });
-    };
-
-    // --- CHECKER SIDE: When a viewer joins the room, send WebRTC offer ---
-    socket.on("livestream:viewer_joined", async ({ viewerSocketId }) => {
-      setLiveViewerCount((prev) => Math.max(prev + 1, peerConnectionsRef.current.size + 1));
-      if (!mediaStreamRef.current) return;
-
-      // Close and delete any existing PC for this viewer socket ID (reconnecting viewer)
-      const existingPc = peerConnectionsRef.current.get(viewerSocketId);
-      if (existingPc) {
-        try { existingPc.close(); } catch {}
-        peerConnectionsRef.current.delete(viewerSocketId);
-      }
-      pendingCandidatesRef.current.delete(viewerSocketId);
-
-      const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-      peerConnectionsRef.current.set(viewerSocketId, pc);
-      pendingCandidatesRef.current.set(viewerSocketId, []);
-
-      pc.oniceconnectionstatechange = () => {
-        console.log(`[Checker ICE] ${viewerSocketId}: ${pc.iceConnectionState}`);
-        if (pc.iceConnectionState === "failed") {
-          try {
-            (pc as any).restartIce?.();
-          } catch {}
-        }
-      };
-
-      // Add tracks with resolution clamping and maintain-framerate preference
-      const activePeers = peerConnectionsRef.current.size;
-      const targetBitrate = Math.max(
-        800_000,
-        Math.min(2_200_000, Math.floor(4_800_000 / Math.max(1, activePeers)))
-      );
-
-      mediaStreamRef.current.getTracks().forEach((track) => {
-        const sender = pc.addTrack(track, mediaStreamRef.current!);
-        if (track.kind === "video" && sender) {
-          try {
-            const params = sender.getParameters();
-            if (!params.encodings || params.encodings.length === 0) {
-              params.encodings = [{}];
-            }
-            params.encodings[0].maxBitrate = targetBitrate;
-            params.encodings[0].maxFramerate = 30;
-            params.degradationPreference = "maintain-framerate";
-
-            const vWidth = broadcastVideoRef.current?.videoWidth || 1920;
-            if (vWidth > 1920) {
-              params.encodings[0].scaleResolutionDownBy = +(vWidth / 1920).toFixed(2);
-            } else {
-              params.encodings[0].scaleResolutionDownBy = 1;
-            }
-
-            sender.setParameters(params).catch(() => {});
-          } catch {}
-
-          // Request keyframe for newly joined peer connection
-          if (typeof (sender as any).generateKeyFrame === "function") {
-            try {
-              (sender as any).generateKeyFrame();
-            } catch {}
-          }
-        }
+        setActiveTab("live");
+        const loops = Number(session?.maxLoops || 1);
+        toast.success(`Replay is now playing live (${loops} ${loops === 1 ? "loop" : "loops"}).`);
       });
 
-      // If streaming from an uploaded video element, micro-nudge playback to force immediate keyframe production
-      if (broadcastSource === "video" && broadcastVideoRef.current && !broadcastVideoRef.current.paused) {
-        try {
-          const curTime = broadcastVideoRef.current.currentTime;
-          broadcastVideoRef.current.currentTime = Math.max(0, curTime - 0.001);
-        } catch {}
-      }
-
-      // Prioritize hardware-accelerated VP8 and H264 codecs
-      try {
-        if ("setCodecPreferences" in RTCRtpTransceiver.prototype && (window as any).RTCRtpReceiver?.getCapabilities) {
-          const transceivers = pc.getTransceivers();
-          const videoTransceiver = transceivers.find((t) => t.sender.track?.kind === "video");
-          if (videoTransceiver) {
-            const caps = (window as any).RTCRtpReceiver.getCapabilities("video");
-            if (caps?.codecs) {
-              const preferred = caps.codecs.filter(
-                (c: any) => c.mimeType.toLowerCase() === "video/vp8" || c.mimeType.toLowerCase() === "video/h264"
-              );
-              const rest = caps.codecs.filter(
-                (c: any) => c.mimeType.toLowerCase() !== "video/vp8" && c.mimeType.toLowerCase() !== "video/h264"
-              );
-              if (preferred.length > 0) {
-                videoTransceiver.setCodecPreferences([...preferred, ...rest]);
-              }
-            }
-          }
-        }
-      } catch {}
-
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          socket.emit("livestream:signal", {
-            targetSocketId: viewerSocketId,
-            signal: { candidate: event.candidate },
-          });
-        }
-      };
-
-      try {
-        let offer = await pc.createOffer({
-          offerToReceiveAudio: false,
-          offerToReceiveVideo: false,
-        });
-
-        // Optimize SDP: Enable Opus in-band FEC and DTX safely without duplicate fmtp
-        if (offer.sdp) {
-          let sdp = offer.sdp;
-          if (/a=fmtp:(\d+)/.test(sdp)) {
-            sdp = sdp.replace(
-              /a=fmtp:(\d+)(.*)/g,
-              (match, pt) => {
-                const isOpus = new RegExp(`a=rtpmap:${pt} opus/48000/2`).test(sdp);
-                if (isOpus) {
-                  return `a=fmtp:${pt} minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=128000`;
-                }
-                return match;
-              }
-            );
-          } else {
-            sdp = sdp.replace(
-              /a=rtpmap:(\d+) opus\/48000\/2/g,
-              "a=rtpmap:$1 opus/48000/2\r\na=fmtp:$1 minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=128000"
-            );
-          }
-          offer = new RTCSessionDescription({ type: offer.type, sdp });
-        }
-
-        await pc.setLocalDescription(offer);
-        socket.emit("livestream:signal", {
-          targetSocketId: viewerSocketId,
-          signal: { sdp: offer },
-        });
-
-        applyAdaptiveBitrate();
-      } catch (err) {
-        console.error("Failed to create WebRTC offer:", err);
-      }
-    });
-
-    socket.on("livestream:viewer_left", ({ viewerSocketId }) => {
-      const pc = peerConnectionsRef.current.get(viewerSocketId);
-      if (pc) {
-        pc.close();
-        peerConnectionsRef.current.delete(viewerSocketId);
-      }
-      pendingCandidatesRef.current.delete(viewerSocketId);
-      setLiveViewerCount(() => peerConnectionsRef.current.size);
-      applyAdaptiveBitrate();
-    });
-
-    // --- VIEWER & CHECKER: Handle incoming WebRTC signals ---
-    socket.on("livestream:signal", async ({ senderSocketId, signal }) => {
-      // 1. Viewer receiving signal from Checker
-      if (signal.sdp && signal.sdp.type === "offer") {
-        if (viewerPeerConnectionRef.current) {
-          try { viewerPeerConnectionRef.current.close(); } catch {}
-        }
-
-        const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-        viewerPeerConnectionRef.current = pc;
-
-        pc.oniceconnectionstatechange = () => {
-          console.log(`[Viewer ICE] state: ${pc.iceConnectionState}`);
-          if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
-            setIsConnectingStream(false);
-            setIsStreamInterrupted(false);
-            isStreamInterruptedRef.current = false;
-          } else if (pc.iceConnectionState === "disconnected") {
-            setIsConnectingStream(true);
-            setIsStreamInterrupted(true);
-            isStreamInterruptedRef.current = true;
-            if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-            reconnectTimeoutRef.current = setTimeout(() => {
-              if (viewerPeerConnectionRef.current?.iceConnectionState === "disconnected" && hasJoinedStreamRef.current) {
-                reconnectViewerStream(false);
-              }
-            }, 3500);
-          } else if (pc.iceConnectionState === "failed") {
-            setIsConnectingStream(true);
-            setIsStreamInterrupted(true);
-            isStreamInterruptedRef.current = true;
-            if (hasJoinedStreamRef.current) {
-              reconnectViewerStream(false);
-            }
-          }
-        };
-
-        pc.ontrack = (event) => {
-          let stream = remoteStreamRef.current;
-          if (!stream) {
-            stream = new MediaStream();
-            remoteStreamRef.current = stream;
-          }
-          if (!stream.getTracks().some((t) => t.id === event.track.id)) {
-            stream.addTrack(event.track);
-          }
-          setIsConnectingStream(false);
-          setIsStreamInterrupted(false);
-          isStreamInterruptedRef.current = false;
-
-          if (viewerVideoRef.current) {
-            if (viewerVideoRef.current.srcObject !== stream) {
-              viewerVideoRef.current.srcObject = stream;
-            }
-            viewerVideoRef.current.play().catch((err) => {
-              console.warn("[Viewer Video] play() rejected (autoplay restricted):", err);
-              // Fallback: Mute the video to bypass browser autoplay restriction, so playback starts
-              if (viewerVideoRef.current) {
-                viewerVideoRef.current.muted = true;
-                setIsViewerMuted(true);
-                viewerVideoRef.current.play().catch(() => {});
-              }
-            });
-          }
-        };
-
-        pc.onicecandidate = (event) => {
-          if (event.candidate) {
-            socket.emit("livestream:signal", {
-              targetSocketId: senderSocketId,
-              signal: { candidate: event.candidate },
-            });
-          }
-        };
-
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-
-        // Flush any candidates buffered before or during remoteDescription set
-        const buffered = [...viewerPendingCandidatesRef.current];
-        viewerPendingCandidatesRef.current = [];
-        for (const cand of buffered) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(cand));
-          } catch {}
-        }
-
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-
-        socket.emit("livestream:signal", {
-          targetSocketId: senderSocketId,
-          signal: { sdp: answer },
-        });
-      } else if (signal.sdp && signal.sdp.type === "answer") {
-        // 2. Checker receiving answer from Viewer
-        const pc = peerConnectionsRef.current.get(senderSocketId);
-        if (pc) {
-          await pc.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-
-          // Flush any buffered candidates for this viewer
-          const buffered = pendingCandidatesRef.current.get(senderSocketId) || [];
-          pendingCandidatesRef.current.delete(senderSocketId);
-          for (const cand of buffered) {
-            await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
-          }
-        }
-      } else if (signal.candidate) {
-        // 3. ICE candidate exchange with buffer support
-        if (peerConnectionsRef.current.has(senderSocketId)) {
-          // Candidate on Checker from Viewer
-          const pc = peerConnectionsRef.current.get(senderSocketId)!;
-          if (pc.remoteDescription && pc.remoteDescription.type) {
-            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)).catch(() => {});
-          } else {
-            const queue = pendingCandidatesRef.current.get(senderSocketId) || [];
-            queue.push(signal.candidate);
-            pendingCandidatesRef.current.set(senderSocketId, queue);
-          }
-        } else {
-          // Candidate on Viewer from Checker
-          const pc = viewerPeerConnectionRef.current;
-          if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate)).catch(() => {});
-          } else {
-            viewerPendingCandidatesRef.current.push(signal.candidate);
-          }
-        }
-      }
-    });
-
-    socket.on("livestream:ended", () => {
-      window.dispatchEvent(
-        new CustomEvent("livestream_status_changed", { detail: { isLive: false } })
-      );
-      setLiveSession(null);
-      remoteStreamRef.current = null;
-      if (viewerVideoRef.current) viewerVideoRef.current.srcObject = null;
-      if (viewerPeerConnectionRef.current) {
-        try { viewerPeerConnectionRef.current.close(); } catch {}
-        viewerPeerConnectionRef.current = null;
-      }
-      setHasJoinedStream(false);
-      hasJoinedStreamRef.current = false;
-      setIsConnectingStream(false);
-      setIsStreamInterrupted(false);
-      isStreamInterruptedRef.current = false;
-      currentReplayLoopRef.current = 1;
-      setCurrentReplayLoop(1);
-      replaySyncedSessionIdRef.current = null;
-      toast.info("The live inspection session has ended.");
-    });
-
-    // --- Real-Time Stream Chat Listeners (Active during live & offline lobby) ---
-    socket.on("initial_messages", ({ chatType, messages }: { chatType: string; messages: LivestreamChatMessage[] }) => {
-      if (chatType !== LIVESTREAM_CHAT_TYPE || !Array.isArray(messages)) return;
-      setChatMessages(
-        messages
-          .map((m) => ({ ...m, createdAt: new Date(m.createdAt) }))
-          .slice(-MAX_CHAT_DISPLAY_MESSAGES)
-      );
-    });
-
-    socket.on("new_message", ({ chatType, message }) => {
-      if (chatType !== LIVESTREAM_CHAT_TYPE || !message) return;
-      const formatted: LivestreamChatMessage = {
-        ...message,
-        createdAt: new Date(message.createdAt),
-      };
-      const myEmail = (currentUserRef.current?.email || "").trim().toLowerCase();
-      const isFromMe = Boolean(
-        myEmail && message.senderEmail && message.senderEmail.trim().toLowerCase() === myEmail
-      );
-
-      setChatMessages((prev) => {
-        if (prev.some((m) => m.id === formatted.id)) return prev;
-        const filtered = isFromMe
-          ? prev.filter((m) => !(m.id.startsWith("temp-") && m.text.trim() === formatted.text.trim()))
-          : prev;
-        return [...filtered, formatted].slice(-MAX_CHAT_DISPLAY_MESSAGES);
-      });
-
-      if (!isFromMe && isChatCollapsedRef.current) {
-        setUnreadChatCount((c) => c + 1);
-      }
-    });
-
-    socket.on("message_edited", ({ chatType, message }) => {
-      if (chatType !== LIVESTREAM_CHAT_TYPE || !message) return;
-      const formatted: LivestreamChatMessage = {
-        ...message,
-        createdAt: new Date(message.createdAt),
-      };
-      setChatMessages((prev) => prev.map((m) => (m.id === formatted.id ? formatted : m)));
-    });
-
-    socket.on("message_deleted", ({ chatType, message }) => {
-      if (chatType !== LIVESTREAM_CHAT_TYPE || !message) return;
-      const formatted: LivestreamChatMessage = {
-        ...message,
-        createdAt: new Date(message.createdAt),
-      };
-      setChatMessages((prev) => prev.map((m) => (m.id === formatted.id ? formatted : m)));
-    });
-
-    socket.on("message_removed", ({ chatType, messageId }) => {
-      if (chatType !== LIVESTREAM_CHAT_TYPE || !messageId) return;
-      setChatMessages((prev) => prev.filter((m) => m.id !== messageId));
-    });
-
-    socket.on("livestream_chat_cleared", ({ clearedBy }: { clearedBy?: string }) => {
-      setChatMessages([]);
-      setUnreadChatCount(0);
-      toast.info(`Stream chat was cleared${clearedBy ? ` by ${clearedBy}` : ""}.`);
-    });
-
-    socket.on("livestream_chat:presence", (count: number) => {
-      if (typeof count === "number") {
-        setChatPresenceCount(count);
-      }
-    });
-
-      socket.on("error_message", (err: unknown) => {
-        if (typeof err === "string" && !err.includes("do not have access")) {
-          toast.error(err);
-        }
+      socket.on("livestream:replay_error", ({ message }: { message?: string }) => {
+        setIsStartingReplayLive(false);
+        toast.error(message || "Unable to start live replay broadcast.");
       });
     });
 
     return () => {
       isMounted = false;
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      if (viewerPeerConnectionRef.current) {
-        try { viewerPeerConnectionRef.current.close(); } catch {}
-      }
       if (activeSocket) {
+        activeSocket.emit("leave_room", { chatType: LIVESTREAM_CHAT_TYPE });
         activeSocket.disconnect();
-      }
-      if (socketRef.current === activeSocket) {
-        socketRef.current = null;
       }
     };
   }, []);
 
+  // Initial load of recordings and user sidebar banner
   useEffect(() => {
-    getSessionUser()
-      .then((user) => {
-        setCurrentUser(user);
-        setIsLoading(false);
-      })
-      .catch(() => setIsLoading(false));
-
     loadRecordings();
 
     getUserSidebarBanner()
@@ -1095,657 +460,7 @@ export default function LivestreamPage() {
     return (checkerEmail && userEmail === checkerEmail) || userRole === "admin";
   };
 
-  // 1-Click Screen Share Capture & Live Broadcast with Microphone Audio
-  const startScreenCapture = async () => {
-    if (!navigator.mediaDevices?.getDisplayMedia) {
-      toast.error("Screen recording is not supported in this browser. Please use Chrome or Edge.");
-      return;
-    }
-
-    if (liveSession && (!currentUser || liveSession.checkerEmail?.toLowerCase() !== currentUser.email?.toLowerCase())) {
-      toast.error(`Checker "${liveSession.checkerName}" is currently live. You can join the broadcast queue to be next!`);
-      return;
-    }
-
-    if (isAnotherCheckerReserved && reservedChecker) {
-      toast.error(`Broadcast slot is currently reserved for ${reservedChecker.name}. You can join the queue behind them.`);
-      return;
-    }
-
-    try {
-      // 1. Capture checker microphone for clear verbal feedback
-      let micStream: MediaStream | null = null;
-      try {
-        micStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        });
-        micStreamRef.current = micStream;
-        setIsMicEnabled(true);
-      } catch (micErr) {
-        console.warn("Microphone access not available or denied:", micErr);
-        toast.info("Microphone not detected; streaming screen without mic audio.");
-      }
-
-      // 2. Capture screen (capped at 1080p @ 30fps to eliminate lag from 2K/4K/144Hz displays)
-      const screenStream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          displaySurface: "monitor",
-          width: { max: 1920 },
-          height: { max: 1080 },
-          frameRate: { ideal: 30, max: 30 },
-        },
-        audio: true,
-      });
-      screenStreamRef.current = screenStream;
-
-      // Optimize encoding for sharp screen detail
-      const screenTrack = screenStream.getVideoTracks()[0];
-      if (screenTrack && "contentHint" in screenTrack) {
-        screenTrack.contentHint = "detail";
-      }
-
-      // 3. Mix microphone + screen audio into combined stream
-      let finalAudioTracks: MediaStreamTrack[] = [];
-      const hasSysAudio = screenStream.getAudioTracks().length > 0;
-      const hasMicAudio = micStream && micStream.getAudioTracks().length > 0;
-
-      if (hasSysAudio && hasMicAudio) {
-        try {
-          const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({
-            sampleRate: 48000,
-            latencyHint: "interactive",
-          });
-          audioContextRef.current = audioCtx;
-          const dest = audioCtx.createMediaStreamDestination();
-          const sysSource = audioCtx.createMediaStreamSource(screenStream);
-          const micSource = audioCtx.createMediaStreamSource(micStream!);
-          sysSource.connect(dest);
-          micSource.connect(dest);
-          finalAudioTracks = dest.stream.getAudioTracks();
-        } catch (mixErr) {
-          finalAudioTracks = micStream!.getAudioTracks();
-        }
-      } else if (hasMicAudio) {
-        finalAudioTracks = micStream!.getAudioTracks();
-      } else if (hasSysAudio) {
-        finalAudioTracks = screenStream.getAudioTracks();
-      }
-
-      const combinedStream = new MediaStream([
-        ...screenStream.getVideoTracks(),
-        ...finalAudioTracks,
-      ]);
-
-      mediaStreamRef.current = combinedStream;
-      setBroadcasterStream(combinedStream);
-      recordedChunksRef.current = [];
-
-      // Attach stream to Checker's Live Monitor Preview
-      if (livePreviewRef.current) {
-        livePreviewRef.current.srcObject = combinedStream;
-        livePreviewRef.current.play().catch(() => {});
-      }
-
-      // Initialize MediaRecorder: Prefer hardware-accelerated VP8 with 2.5 Mbps cap for smooth performance
-      let mimeType = "video/webm;codecs=vp8,opus";
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = "video/webm;codecs=vp9,opus";
-      }
-      if (!MediaRecorder.isTypeSupported(mimeType)) {
-        mimeType = "video/webm";
-      }
-
-      const recorder = new MediaRecorder(combinedStream, {
-        mimeType,
-        videoBitsPerSecond: 2_500_000,
-        audioBitsPerSecond: 128_000,
-      });
-      recorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          recordedChunksRef.current.push(event.data);
-        }
-      };
-
-      recorder.start(1000);
-      mediaRecorderRef.current = recorder;
-
-      const title = sessionTitle || `Quality Audit Check - ${new Date().toLocaleDateString()}`;
-      setSessionTitle(title);
-      setIsCapturing(true);
-      setBroadcastSource("screen");
-      setRecordingSeconds(0);
-      recordingStartTimeRef.current = Date.now();
-
-      const broadcastMeta = {
-        title,
-        projectType: sessionProjectType,
-        broadcastType: "screen",
-      };
-      activeBroadcastMetaRef.current = broadcastMeta;
-
-      // Broadcast to all viewers via Socket.io that checker is LIVE
-      if (socketRef.current) {
-        socketRef.current.emit("livestream:checker_start", broadcastMeta);
-      }
-
-      // Start Recording Timer
-      timerIntervalRef.current = setInterval(() => {
-        setRecordingSeconds((prev) => prev + 1);
-      }, 1000);
-
-      // Handle user clicking the Chrome floating "Stop sharing" bar
-      screenStream.getVideoTracks()[0].onended = () => {
-        finishScreenCapture();
-      };
-
-      toast.success("Live broadcast started! Screen and microphone are now live.");
-    } catch (err) {
-      console.error("Screen capture error:", err);
-      toast.error("Screen sharing was cancelled.");
-    }
-  };
-
-  // Finish Recording and Open Review Screen (Allows Checker to Save or Discard)
-  const finishScreenCapture = () => {
-    if (!mediaRecorderRef.current || !mediaStreamRef.current) return;
-
-    if (timerIntervalRef.current) {
-      clearInterval(timerIntervalRef.current);
-      timerIntervalRef.current = null;
-    }
-
-    activeBroadcastMetaRef.current = null;
-    // Notify viewers that live broadcast ended
-    if (socketRef.current) {
-      socketRef.current.emit("livestream:checker_stop");
-    }
-
-    // Close all WebRTC peer connections
-    peerConnectionsRef.current.forEach((pc) => pc.close());
-    peerConnectionsRef.current.clear();
-    setLiveViewerCount(0);
-
-    const recorder = mediaRecorderRef.current;
-    const elapsedSeconds = recordingStartTimeRef.current
-      ? Math.max(1, Math.round((Date.now() - recordingStartTimeRef.current) / 1000))
-      : recordingSeconds;
-    setRecordedDuration(elapsedSeconds);
-
-    recorder.onstop = () => {
-      // Stop all tracks on screen, mic, and combined streams
-      screenStreamRef.current?.getTracks().forEach((track) => track.stop());
-      micStreamRef.current?.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-      if (audioContextRef.current) {
-        audioContextRef.current.close().catch(() => {});
-        audioContextRef.current = null;
-      }
-      screenStreamRef.current = null;
-      micStreamRef.current = null;
-      mediaStreamRef.current = null;
-      setBroadcasterStream(null);
-      mediaRecorderRef.current = null;
-      if (livePreviewRef.current) livePreviewRef.current.srcObject = null;
-
-      const mime = recorder.mimeType || "video/webm";
-      const blob = new Blob(recordedChunksRef.current, { type: mime });
-      const url = URL.createObjectURL(blob);
-      setRecordedBlob(blob);
-      setRecordedBlobUrl(url);
-      setIsCapturing(false);
-      setIsReviewing(true);
-      toast.info("Session ended. Review your recording below to save or discard.");
-    };
-
-    recorder.stop();
-  };
-
-  // Shared upload helper with safe JSON/HTTP error handling
-  const uploadRecordingFormData = async (formData: FormData) => {
-    const response = await fetch("/api/livestream/upload", {
-      method: "POST",
-      body: formData,
-    });
-    const rawText = await response.text();
-    let data: { success?: boolean; recording?: any; error?: string } = {};
-    try {
-      data = rawText ? JSON.parse(rawText) : {};
-    } catch {
-      if (response.status === 413) {
-        throw new Error("Recording file is too large for the upload limit.");
-      }
-      throw new Error(`Upload failed (HTTP ${response.status}).`);
-    }
-    if (!response.ok && !data.error) {
-      throw new Error(`Upload failed (HTTP ${response.status}).`);
-    }
-    return data;
-  };
-
-  // Publish Recording to Replay Library
-  const handlePublishRecording = async () => {
-    if (!recordedBlob) return;
-
-    setIsUploading(true);
-    toast.info("Publishing recording to Replay Library...");
-
-    const filename = `audit-${Date.now()}.webm`;
-    const file = new File([recordedBlob], filename, { type: recordedBlob.type || "video/webm" });
-
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("title", sessionTitle || "Quality Audit Check");
-      formData.append("projectType", sessionProjectType);
-      formData.append("durationSec", String(recordedDuration));
-      formData.append("description", sessionNotes);
-
-      const data = await uploadRecordingFormData(formData);
-      if (data.success && data.recording) {
-        toast.success("Check session successfully published to Replay Library!");
-        if (recordedBlobUrl) URL.revokeObjectURL(recordedBlobUrl);
-        setRecordedBlob(null);
-        setRecordedBlobUrl(null);
-        setIsReviewing(false);
-        setIsUploading(false);
-        setBroadcastSource(null);
-        await loadRecordings();
-        setSelectedRecording(data.recording);
-        setActiveTab("vod");
-      } else {
-        toast.error(data.error || "Failed to save recording.");
-        setIsUploading(false);
-      }
-    } catch (err: any) {
-      toast.error("Upload error: " + (err.message || "Failed to upload."));
-      setIsUploading(false);
-    }
-  };
-
-  // Discard Recording Completely (Nothing is Saved)
-  const handleDiscardRecording = () => {
-    if (recordedBlobUrl) URL.revokeObjectURL(recordedBlobUrl);
-    setRecordedBlob(null);
-    setRecordedBlobUrl(null);
-    setIsReviewing(false);
-    setRecordedDuration(0);
-    setRecordingSeconds(0);
-    setBroadcastSource(null);
-    toast.info("Recording discarded. Nothing was saved to the library.");
-  };
-
-  // Discard while still actively live recording
-  const discardCapture = () => {
-    activeBroadcastMetaRef.current = null;
-    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    if (socketRef.current) socketRef.current.emit("livestream:checker_stop");
-    peerConnectionsRef.current.forEach((pc) => pc.close());
-    peerConnectionsRef.current.clear();
-    setLiveViewerCount(0);
-    screenStreamRef.current?.getTracks().forEach((t) => t.stop());
-    micStreamRef.current?.getTracks().forEach((t) => t.stop());
-    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
-    if (audioContextRef.current) {
-      audioContextRef.current.close().catch(() => {});
-      audioContextRef.current = null;
-    }
-    screenStreamRef.current = null;
-    micStreamRef.current = null;
-    mediaStreamRef.current = null;
-    setBroadcasterStream(null);
-    mediaRecorderRef.current = null;
-    if (livePreviewRef.current) livePreviewRef.current.srcObject = null;
-    setIsCapturing(false);
-    setBroadcastSource(null);
-    setRecordingSeconds(0);
-    toast.info("Live recording cancelled and discarded.");
-  };
-
-  // Handle file selection from input
-  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (uploadBlobUrl) URL.revokeObjectURL(uploadBlobUrl);
-      const url = URL.createObjectURL(file);
-      setUploadFile(file);
-      setUploadBlobUrl(url);
-      const cleanName = file.name.replace(/\.[^/.]+$/, "");
-      setUploadTitle(cleanName);
-      setUploadNotes("");
-      setVideoCurrentTime(0);
-
-      const tempVideo = document.createElement("video");
-      tempVideo.preload = "metadata";
-      tempVideo.src = url;
-      tempVideo.onloadedmetadata = () => {
-        setVideoDuration(Math.round(tempVideo.duration || 0));
-      };
-    }
-  };
-
-  // Start Video Broadcast (Checker Studio)
-  const startVideoBroadcast = () => {
-    if (!uploadFile || !uploadBlobUrl) {
-      toast.error("Please choose a video file first.");
-      return;
-    }
-
-    if (liveSession && (!currentUser || liveSession.checkerEmail?.toLowerCase() !== currentUser.email?.toLowerCase())) {
-      toast.error(`Checker "${liveSession.checkerName}" is currently live. You can join the broadcast queue to be next!`);
-      return;
-    }
-
-    if (isAnotherCheckerReserved && reservedChecker) {
-      toast.error(`Broadcast slot is currently reserved for ${reservedChecker.name}. You can join the queue behind them.`);
-      return;
-    }
-
-    const title = uploadTitle?.trim() || uploadFile.name.replace(/\.[^/.]+$/, "");
-    setSessionTitle(title);
-    setSessionProjectType(uploadProjectType);
-    setSessionNotes(uploadNotes);
-    setBroadcastSource("video");
-    setIsCapturing(true);
-    setRecordingSeconds(0);
-    setVideoCurrentTime(0);
-    setIsVideoPaused(false);
-  };
-
-  // Hook to initiate WebRTC capture once video player mounts in Studio
-  useEffect(() => {
-    if (!isCapturing || broadcastSource !== "video") return;
-
-    let isCancelled = false;
-
-    const setupVideoStream = async () => {
-      const video = broadcastVideoRef.current;
-      if (!video) return;
-
-      try {
-        video.currentTime = 0;
-        await video.play();
-        if (isCancelled) return;
-
-        const captureFn = (video as any).captureStream || (video as any).mozCaptureStream;
-        if (!captureFn) {
-          toast.error("Browser does not support video streaming. Please use Chrome, Edge, or Firefox.");
-          setIsCapturing(false);
-          setBroadcastSource(null);
-          return;
-        }
-
-        const videoStream: MediaStream = captureFn.call(video, 30);
-
-        const videoTrack = videoStream.getVideoTracks()[0];
-        if (videoTrack && "contentHint" in videoTrack) {
-          videoTrack.contentHint = "detail";
-        }
-
-        // Capture checker microphone if available
-        let micStream: MediaStream | null = null;
-        try {
-          micStream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-            },
-          });
-          micStreamRef.current = micStream;
-          setIsMicEnabled(true);
-        } catch {
-          console.warn("Microphone not available; streaming video audio only.");
-        }
-
-        let combinedAudioTracks: MediaStreamTrack[] = [];
-        const hasVideoAudio = videoStream.getAudioTracks().length > 0;
-        const hasMicAudio = micStream && micStream.getAudioTracks().length > 0;
-
-        if (hasVideoAudio || hasMicAudio) {
-          try {
-            const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({
-              sampleRate: 48000,
-              latencyHint: "interactive",
-            });
-            audioContextRef.current = audioCtx;
-            const dest = audioCtx.createMediaStreamDestination();
-
-            if (hasVideoAudio) {
-              if (!mediaElementSourceRef.current) {
-                mediaElementSourceRef.current = audioCtx.createMediaElementSource(video);
-              }
-              const sourceNode = mediaElementSourceRef.current;
-              sourceNode.connect(dest);
-
-              const monitorGain = audioCtx.createGain();
-              monitorGain.gain.value = isMonitorAudioMuted ? 0 : 0.8;
-              sourceNode.connect(monitorGain);
-              monitorGain.connect(audioCtx.destination);
-              monitorGainRef.current = monitorGain;
-            }
-
-            if (hasMicAudio && micStream) {
-              const micSource = audioCtx.createMediaStreamSource(micStream);
-              micSource.connect(dest);
-            }
-
-            combinedAudioTracks = dest.stream.getAudioTracks();
-          } catch (audioErr) {
-            console.warn("Web Audio mix fallback:", audioErr);
-            if (hasVideoAudio) {
-              combinedAudioTracks = videoStream.getAudioTracks();
-            } else if (hasMicAudio) {
-              combinedAudioTracks = micStream!.getAudioTracks();
-            }
-          }
-        }
-
-        const combinedStream = new MediaStream([
-          videoTrack,
-          ...combinedAudioTracks,
-        ]);
-
-        mediaStreamRef.current = combinedStream;
-        setBroadcasterStream(combinedStream);
-
-        const broadcastTitle = sessionTitle || uploadTitle || uploadFile?.name || "Quality Audit Check";
-        const broadcastType = sessionProjectType || uploadProjectType;
-        const broadcastMeta = {
-          title: broadcastTitle,
-          projectType: broadcastType,
-          broadcastType: "video",
-        };
-        activeBroadcastMetaRef.current = broadcastMeta;
-
-        if (socketRef.current) {
-          socketRef.current.emit("livestream:checker_start", broadcastMeta);
-        }
-
-        if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-        timerIntervalRef.current = setInterval(() => {
-          setRecordingSeconds((prev) => prev + 1);
-        }, 1000);
-
-        toast.success("Live broadcast started! Video check is streaming live to all viewers.");
-      } catch (err: any) {
-        console.error("Video broadcast error:", err);
-        toast.error("Failed to start video broadcast: " + (err.message || "Unknown error"));
-        setIsCapturing(false);
-        setBroadcastSource(null);
-        setBroadcasterStream(null);
-      }
-    };
-
-    setupVideoStream();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [isCapturing, broadcastSource]);
-
-  // Finish Video Broadcast (opens Review screen)
-  const finishVideoBroadcast = () => {
-    activeBroadcastMetaRef.current = null;
-    if (timerIntervalRef.current) {
-      clearInterval(timerIntervalRef.current);
-      timerIntervalRef.current = null;
-    }
-
-    if (socketRef.current) {
-      socketRef.current.emit("livestream:checker_stop");
-    }
-
-    peerConnectionsRef.current.forEach((pc) => pc.close());
-    peerConnectionsRef.current.clear();
-    setLiveViewerCount(0);
-
-    if (broadcastVideoRef.current) {
-      broadcastVideoRef.current.pause();
-    }
-
-    micStreamRef.current?.getTracks().forEach((track) => track.stop());
-    micStreamRef.current = null;
-    mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
-    mediaStreamRef.current = null;
-    setBroadcasterStream(null);
-
-    if (audioContextRef.current) {
-      audioContextRef.current.close().catch(() => {});
-      audioContextRef.current = null;
-    }
-    monitorGainRef.current = null;
-    mediaElementSourceRef.current = null;
-
-    const finalDuration = videoCurrentTime || videoDuration || recordingSeconds || 0;
-    setRecordedDuration(finalDuration);
-    setIsCapturing(false);
-    setIsReviewing(true);
-    toast.info("Session ended. Review your video check below to publish to the library or discard.");
-  };
-
-  // Discard Video Broadcast while actively live
-  const discardVideoBroadcast = () => {
-    activeBroadcastMetaRef.current = null;
-    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    if (socketRef.current) socketRef.current.emit("livestream:checker_stop");
-    peerConnectionsRef.current.forEach((pc) => pc.close());
-    peerConnectionsRef.current.clear();
-    setLiveViewerCount(0);
-
-    if (broadcastVideoRef.current) {
-      broadcastVideoRef.current.pause();
-      broadcastVideoRef.current.currentTime = 0;
-    }
-
-    micStreamRef.current?.getTracks().forEach((t) => t.stop());
-    micStreamRef.current = null;
-    mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
-    mediaStreamRef.current = null;
-    setBroadcasterStream(null);
-
-    if (audioContextRef.current) {
-      audioContextRef.current.close().catch(() => {});
-      audioContextRef.current = null;
-    }
-    monitorGainRef.current = null;
-    mediaElementSourceRef.current = null;
-
-    setIsCapturing(false);
-    setBroadcastSource(null);
-    setRecordingSeconds(0);
-    setVideoCurrentTime(0);
-    toast.info("Live video broadcast cancelled.");
-  };
-
-  // Publish Uploaded Video to Replay Library
-  const handlePublishVideoFile = async () => {
-    if (!uploadFile) return;
-
-    setIsUploading(true);
-    toast.info("Publishing video check to Replay Library...");
-
-    try {
-      const formData = new FormData();
-      formData.append("file", uploadFile);
-      formData.append("title", sessionTitle || uploadTitle || uploadFile.name);
-      formData.append("projectType", sessionProjectType || uploadProjectType);
-      formData.append("durationSec", String(recordedDuration || videoDuration || 0));
-      formData.append("description", sessionNotes || uploadNotes);
-
-      const data = await uploadRecordingFormData(formData);
-      if (data.success && data.recording) {
-        toast.success("Check session successfully published to Replay Library!");
-        if (uploadBlobUrl) URL.revokeObjectURL(uploadBlobUrl);
-        setUploadFile(null);
-        setUploadBlobUrl(null);
-        setUploadTitle("");
-        setUploadNotes("");
-        setIsReviewing(false);
-        setIsUploading(false);
-        setBroadcastSource(null);
-        await loadRecordings();
-        setSelectedRecording(data.recording);
-        setActiveTab("vod");
-      } else {
-        toast.error(data.error || "Failed to save video to library.");
-        setIsUploading(false);
-      }
-    } catch (err: any) {
-      toast.error("Upload error: " + (err.message || "Failed to upload."));
-      setIsUploading(false);
-    }
-  };
-
-  // Discard Uploaded Video Broadcast without saving to library
-  const handleDiscardVideoBroadcast = () => {
-    if (uploadBlobUrl) URL.revokeObjectURL(uploadBlobUrl);
-    setUploadFile(null);
-    setUploadBlobUrl(null);
-    setUploadTitle("");
-    setUploadNotes("");
-    setIsReviewing(false);
-    setRecordedDuration(0);
-    setRecordingSeconds(0);
-    setBroadcastSource(null);
-    toast.info("Livestream finished. Video was not saved to Replay Library.");
-  };
-
-  // Video playback controls
-  const toggleVideoPlayPause = () => {
-    const video = broadcastVideoRef.current;
-    if (!video) return;
-    if (video.paused) {
-      video.play().catch(() => {});
-      setIsVideoPaused(false);
-    } else {
-      video.pause();
-      setIsVideoPaused(true);
-    }
-  };
-
-  const handleVideoSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newTime = Number(e.target.value);
-    setVideoCurrentTime(newTime);
-    if (broadcastVideoRef.current) {
-      broadcastVideoRef.current.currentTime = newTime;
-    }
-  };
-
-  const handleSeekRelative = (seconds: number) => {
-    const video = broadcastVideoRef.current;
-    if (!video) return;
-    const duration = videoDuration || video.duration || 0;
-    const current = video.currentTime;
-    const target = Math.max(0, Math.min(duration, current + seconds));
-    video.currentTime = target;
-    setVideoCurrentTime(Math.round(target));
-  };
-
-  // Keyboard shortcuts for video broadcast playback: Left Arrow (-5s), Right Arrow (+5s), Space (Play/Pause)
+  // Keyboard shortcuts for video broadcast playback in Studio
   useEffect(() => {
     if (activeTab !== "studio" || !isCapturing || broadcastSource !== "video") return;
 
@@ -1774,23 +489,9 @@ export default function LivestreamPage() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeTab, isCapturing, broadcastSource, videoDuration]);
+  }, [activeTab, isCapturing, broadcastSource, handleSeekRelative, toggleVideoPlayPause]);
 
-  const toggleMonitorAudio = () => {
-    setIsMonitorAudioMuted((prev) => {
-      const next = !prev;
-      if (monitorGainRef.current) {
-        monitorGainRef.current.gain.value = next ? 0 : 0.8;
-      }
-      if (broadcastVideoRef.current && !monitorGainRef.current) {
-        broadcastVideoRef.current.muted = next;
-      }
-      toast.info(next ? "Local monitor audio muted 🔇" : "Local monitor audio active 🔊");
-      return next;
-    });
-  };
-
-  // Handle Manual File Upload (Direct upload without livestreaming)
+  // Handle Manual File Upload directly to library
   const handleManualUpload = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!uploadFile) {
@@ -1798,7 +499,6 @@ export default function LivestreamPage() {
       return;
     }
 
-    setIsUploading(true);
     toast.info("Uploading video check directly to Replay Library...");
 
     try {
@@ -1809,32 +509,39 @@ export default function LivestreamPage() {
       formData.append("durationSec", String(videoDuration || 0));
       formData.append("description", uploadNotes);
 
-      const data = await uploadRecordingFormData(formData);
+      const response = await fetch("/api/livestream/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json();
       if (data.success && data.recording) {
         toast.success("Video check uploaded successfully to Replay Library!");
         if (uploadBlobUrl) URL.revokeObjectURL(uploadBlobUrl);
-        setUploadFile(null);
-        setUploadBlobUrl(null);
-        setUploadTitle("");
-        setUploadNotes("");
-        setIsUploading(false);
         await loadRecordings();
         setSelectedRecording(data.recording);
         setActiveTab("vod");
       } else {
         toast.error(data.error || "Upload failed.");
-        setIsUploading(false);
       }
     } catch (err: any) {
       toast.error("Error: " + (err.message || "Failed to upload file."));
-      setIsUploading(false);
     }
   };
 
-  const formatTimer = (totalSeconds: number) => {
-    const mins = Math.floor(totalSeconds / 60);
-    const secs = totalSeconds % 60;
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
+  const onPublishRecording = () => {
+    handlePublishRecording((rec) => {
+      loadRecordings();
+      setSelectedRecording(rec);
+      setActiveTab("vod");
+    });
+  };
+
+  const onPublishVideoFile = () => {
+    handlePublishVideoFile((rec) => {
+      loadRecordings();
+      setSelectedRecording(rec);
+      setActiveTab("vod");
+    });
   };
 
   const formatUptime = (totalSeconds: number) => {
@@ -2365,7 +1072,7 @@ export default function LivestreamPage() {
                           if (el) {
                             el.muted = true;
                             el.defaultMuted = true;
-                            const stream = broadcasterStream || mediaStreamRef.current;
+                            const stream = broadcasterStream;
                             if (stream && el.srcObject !== stream) {
                               el.srcObject = stream;
                               el.play().catch(() => {});
@@ -2503,14 +1210,26 @@ export default function LivestreamPage() {
                   ) : liveSession ? (
                     hasJoinedStream ? (
                       <div className="relative w-full h-full bg-black flex items-center justify-center">
+                        {isSlowConnection && !isConnectingStream && !isNetworkOffline && (
+                          <div className="absolute top-13 left-3 z-30 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-amber-950/90 border border-amber-500/50 text-amber-200 text-xs shadow-xl backdrop-blur-md animate-in fade-in slide-in-from-top-1 max-w-[calc(100%-24px)] sm:max-w-md">
+                            <WifiOff className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
+                            <div className="truncate sm:whitespace-normal">
+                              <span className="font-bold text-amber-300">Slow Internet Detected:</span>
+                              <span className="ml-1 text-amber-100/90 text-[11px]">
+                                {networkStats.rttMs > 0 ? `High ping (${networkStats.rttMs}ms) • ` : ""}
+                                Stream lag or buffering is due to your local connection.
+                              </span>
+                            </div>
+                          </div>
+                        )}
                         <video
                           ref={(el) => {
                             viewerVideoRef.current = el;
                             if (el) {
                               el.muted = isViewerMuted;
                               el.defaultMuted = isViewerMuted;
-                              if (remoteStreamRef.current && el.srcObject !== remoteStreamRef.current) {
-                                el.srcObject = remoteStreamRef.current;
+                              if (remoteStream && el.srcObject !== remoteStream) {
+                                el.srcObject = remoteStream;
                                 el.play().catch(() => {});
                               }
                             }
@@ -2583,6 +1302,21 @@ export default function LivestreamPage() {
                           >
                             <RefreshCw className={`w-3.5 h-3.5 ${isConnectingStream ? "animate-spin" : ""}`} />
                             Reload
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (viewerVideoRef.current) {
+                                if (document.pictureInPictureElement) {
+                                  document.exitPictureInPicture().catch(() => {});
+                                } else if ((viewerVideoRef.current as any).requestPictureInPicture) {
+                                  (viewerVideoRef.current as any).requestPictureInPicture().catch(() => {});
+                                }
+                              }
+                            }}
+                            className="p-1.5 rounded-xl bg-black/70 hover:bg-black/90 text-white text-xs font-semibold flex items-center justify-center border border-white/20 transition-all cursor-pointer backdrop-blur-md"
+                            title="Picture-in-Picture"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
                           </button>
                           <button
                             onClick={() => {
@@ -3114,36 +1848,27 @@ export default function LivestreamPage() {
                       </div>
 
                       <div className="relative aspect-video w-full bg-black rounded-xl overflow-hidden border border-black/20 dark:border-white/20 shadow-inner flex items-center justify-center group">
-                        {broadcastSource === "video" ? (
-                          <>
-                            <video
-                              ref={broadcastVideoRef}
-                              src={uploadBlobUrl || undefined}
-                              playsInline
-                              onTimeUpdate={(e) => {
-                                setVideoCurrentTime(Math.round(e.currentTarget.currentTime));
-                              }}
-                              onEnded={finishVideoBroadcast}
-                              onPlay={() => setIsVideoPaused(false)}
-                              onPause={() => setIsVideoPaused(true)}
-                              className="w-full h-full object-contain"
-                            />
-                            {/* Play/Pause Overlay Toggle */}
-                            <button
-                              onClick={toggleVideoPlayPause}
-                              className="absolute inset-0 m-auto w-16 h-16 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-xl backdrop-blur-xs"
-                            >
-                              {isVideoPaused ? <Play className="w-7 h-7 fill-current ml-1" /> : <Pause className="w-7 h-7 fill-current" />}
-                            </button>
-                          </>
-                        ) : (
-                          <video
-                            ref={livePreviewRef}
-                            autoPlay
-                            playsInline
-                            muted
-                            className="w-full h-full object-contain"
-                          />
+                        <video
+                          ref={(el) => {
+                            livePreviewRef.current = el;
+                            if (el && broadcasterStream && el.srcObject !== broadcasterStream) {
+                              el.srcObject = broadcasterStream;
+                              el.play().catch(() => {});
+                            }
+                          }}
+                          autoPlay
+                          playsInline
+                          muted
+                          className="w-full h-full object-contain"
+                        />
+                        {broadcastSource === "video" && (
+                          <button
+                            type="button"
+                            onClick={toggleVideoPlayPause}
+                            className="absolute inset-0 m-auto w-16 h-16 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-xl backdrop-blur-xs"
+                          >
+                            {isVideoPaused ? <Play className="w-7 h-7 fill-current ml-1" /> : <Pause className="w-7 h-7 fill-current" />}
+                          </button>
                         )}
                       </div>
 
@@ -3191,7 +1916,7 @@ export default function LivestreamPage() {
                             min="0"
                             max={videoDuration || 100}
                             value={videoCurrentTime}
-                            onChange={handleVideoSeek}
+                            onChange={(e) => handleVideoSeek(Number(e.target.value))}
                             className="w-full accent-[#1F7A1F] dark:accent-[#55f761] cursor-pointer"
                           />
 
@@ -3334,7 +2059,7 @@ export default function LivestreamPage() {
                       {broadcastSource === "video" ? "Finish (Do Not Save to Library)" : "Discard Recording"}
                     </button>
                     <button
-                      onClick={broadcastSource === "video" ? handlePublishVideoFile : handlePublishRecording}
+                      onClick={broadcastSource === "video" ? onPublishVideoFile : onPublishRecording}
                       disabled={isUploading}
                       className="flex items-center gap-2 px-6 py-2.5 bg-[#1F7A1F] dark:bg-[#55f761] text-white dark:text-[#060D14] rounded-xl text-xs font-bold shadow-lg hover:scale-102 active:scale-98 transition-all cursor-pointer"
                     >

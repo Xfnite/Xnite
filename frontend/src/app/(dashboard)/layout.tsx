@@ -23,6 +23,8 @@ import { getReferralSlugAction } from "@/app/actions/referral";
 import GlobalPerformanceAnnouncements from "@/components/GlobalPerformanceAnnouncements";
 import GlobalLowHoursAnnouncements from "@/components/GlobalLowHoursAnnouncements";
 import WelcomeTermsModal from "@/components/WelcomeTermsModal";
+import { LivestreamProvider } from "@/contexts/LivestreamContext";
+import LivestreamMiniPlayer from "@/components/Livestream/LivestreamMiniPlayer";
 
 // The Ginger role sync calls Ginger's API; checking every few minutes per user is
 // plenty, instead of on every page change. A different user always syncs at once.
@@ -343,7 +345,7 @@ export default function DashboardLayout({
   // recreating it, so its data fetch (getLoyaltyData) starts as soon as the
   // session is known and is never reset when the rest of the layout unblocks.
   return (
-    <>
+    <LivestreamProvider initialUser={{ email: userEmail, role: userRole, name: userName }}>
       {isAuthChecking ? (
         <div className="min-h-screen flex items-center justify-center bg-[#E0E1DD] dark:bg-[#060D14]">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#0D1B2A] dark:border-[#E0E1DD]"></div>
@@ -419,6 +421,7 @@ export default function DashboardLayout({
           onboardingProgress={onboardingProgress}
         />
       )}
-    </>
+      <LivestreamMiniPlayer />
+    </LivestreamProvider>
   );
 }

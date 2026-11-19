@@ -24,10 +24,23 @@
 const LC_BASE_URL = "https://api.xfnite.cloud";
 
 /**
+ * Strips URLs (like Google Drive links) and trailing separators from a cutoff string.
+ */
+function cleanCutoffNote_(val) {
+    if (!val) return "";
+    let str = String(val).trim();
+    str = str.split('- Projects')[0].trim();
+    str = str.replace(/\s*[-–—:]*\s*https?:\/\/[^\s]+/gi, "").trim();
+    str = str.replace(/https?:\/\/[^\s]+/gi, "").trim();
+    str = str.replace(/[\s\-–—:]+$/, "").trim();
+    return str;
+}
+
+/**
  * Normalizes cutoff strings for comparison (e.g. "October 15, 2026 Cutoff" -> "october152026")
  */
 function normalizeCutoffForLC_(str) {
-    return String(str || "")
+    return cleanCutoffNote_(str)
         .toLowerCase()
         .replace(/cutoff/gi, "")
         .replace(/[^a-z0-9]/g, "")
@@ -61,7 +74,7 @@ function getActiveCutoffForLC_(ss) {
     // 2. Fallback: FINAL!T3
     const finalSheet = ss.getSheetByName("FINAL");
     if (finalSheet) {
-        const t3Val = String(finalSheet.getRange("T3").getValue() || "").trim();
+        const t3Val = cleanCutoffNote_(finalSheet.getRange("T3").getValue());
         if (t3Val) return t3Val;
     }
 
@@ -220,235 +233,107 @@ function pullDataToLowerCouncil(isAuto = false) {
         if (bonusCol === -1) bonusCol = 7;  // Col G: Recruiter Bonus:
 
         const maxRow = sheet.getLastRow();
-        const existingRowMap = new Map();
-        const existingNameMap = new Map();
+        const numRecruiters = recruitersList.length;
 
-        // Scan existing rows (from Row 2 to maxRow) to match members
-        if (maxRow >= 2) {
-            const emailValues = sheet.getRange(2, emailCol, maxRow - 1, 1).getValues();
-            const nameValues = sheet.getRange(2, nameCol, maxRow - 1, 1).getValues();
-
-            for (let i = 0; i < emailValues.length; i++) {
-                const em = String(emailValues[i][0] || "").trim().toLowerCase();
-                const nm = String(nameValues[i][0] || "").trim().toLowerCase();
-                const sheetRowNum = i + 2;
-
-                if (em) existingRowMap.set(em, sheetRowNum);
-                if (nm) existingNameMap.set(nm, sheetRowNum);
-            }
+        // 1. Capture sample formulas from Row 2 (or Row 3 as fallback) BEFORE modifying the sheet
+        const row2Formulas = maxRow >= 2 ? (sheet.getRange(2, 1, 1, lastCol).getFormulas()[0] || []) : [];
+        const row3Formulas = maxRow >= 3 ? (sheet.getRange(3, 1, 1, lastCol).getFormulas()[0] || []) : [];
+        const sampleFormulas = [];
+        for (let c = 0; c < lastCol; c++) {
+            sampleFormulas[c] = row2Formulas[c] || row3Formulas[c] || "";
         }
 
-        function findExistingRow(item) {
-            const ge = String(item.recruiterUser?.gingerEmail || "").trim().toLowerCase();
-            const pe = String(item.email || "").trim().toLowerCase();
-            if (ge && existingRowMap.has(ge)) return existingRowMap.get(ge);
-            if (pe && existingRowMap.has(pe)) return existingRowMap.get(pe);
-            return null;
-        }
+        let grandTotal = 0;
+        const names = [];
+        const emails = [];
+        const bonuses = [];
 
-        let matchCount = 0;
         recruitersList.forEach(item => {
-            if (findExistingRow(item)) matchCount++;
+            const totalRounded = Math.round(item.totalBonus * 100) / 100;
+            grandTotal += totalRounded;
+
+            const u = item.recruiterUser;
+            let fullName = u?.name || "";
+            if (u?.firstName || u?.lastName) {
+                fullName = [u.firstName, u.lastName].filter(Boolean).join(" ");
+            }
+
+            names.push([fullName || "N/A"]);
+            emails.push([u?.gingerEmail || item.email]);
+            bonuses.push([totalRounded]);
         });
 
-        // If no Lower Council recruiters match existing rows, it's a fresh duplicate (e.g. from X1.INNERCOUNCIL)
-        const isFreshSheet = (matchCount === 0);
-
-        let updatedCount = 0;
-        let insertedCount = 0;
-        let grandTotal = 0;
-
-        // 7. Write to X1.LOWERCOUNCIL sheet
-        if (isFreshSheet) {
-            // =========================================================================
-            // FRESH SHEET / DUPLICATED FROM X1.INNERCOUNCIL
-            // =========================================================================
-            const numRecruiters = recruitersList.length;
-
-            // Capture row 2 formulas (e.g. Total Payment with Salary, Status, etc.)
-            let row2Formulas = [];
-            if (maxRow >= 2) {
-                row2Formulas = sheet.getRange(2, 1, 1, lastCol).getFormulas()[0] || [];
-            }
-
-            // Detect marker columns to clear (Push Status, ID, Push Date, Error)
-            const markerCols = [];
-            for (let i = 0; i < headerRowValues.length; i++) {
-                const h = String(headerRowValues[i] || "").toLowerCase().trim();
-                if (h.includes("push status") || h === "id" || h.includes("push date") || h === "error") {
-                    markerCols.push(i + 1);
-                }
-            }
-
-            const names = [];
-            const emails = [];
-            const bonuses = [];
-
-            recruitersList.forEach(item => {
-                const totalRounded = Math.round(item.totalBonus * 100) / 100;
-                grandTotal += totalRounded;
-
-                const u = item.recruiterUser;
-                let fullName = u?.name || "";
-                if (u?.firstName || u?.lastName) {
-                    fullName = [u.firstName, u.lastName].filter(Boolean).join(" ");
-                }
-
-                names.push([fullName || "N/A"]);
-                emails.push([u?.gingerEmail || item.email]);
-                bonuses.push([totalRounded]);
-                insertedCount++;
-            });
-
-            // Write Name, gingeremail, and Recruiter Bonus starting at Row 2
-            sheet.getRange(2, nameCol, names.length, 1).setValues(names);
-            sheet.getRange(2, emailCol, emails.length, 1).setValues(emails);
-            sheet.getRange(2, bonusCol, bonuses.length, 1).setValues(bonuses);
-
-            // Format Recruiter Bonus as currency
-            sheet.getRange(2, bonusCol, bonuses.length, 1)
-                .setNumberFormat("₱#,##0.00")
-                .setFontWeight("bold");
-
-            // Auto-fill or clear formula columns
-            // Only regular (single-cell) formulas are copied down.
-            // ARRAYFORMULAs must stay ONLY in Row 2 and rows 3+ must be cleared so they can expand freely!
-            for (let c = 1; c <= lastCol; c++) {
-                const formula = row2Formulas[c - 1] || "";
-                if (!formula) continue;
-
-                const fUpper = formula.toUpperCase();
-                const isArrayFormula = fUpper.includes("ARRAYFORMULA") ||
-                    fUpper.includes("FILTER(") ||
-                    fUpper.includes("QUERY(") ||
-                    fUpper.includes("BYROW(") ||
-                    fUpper.includes("MAP(") ||
-                    fUpper.includes("IMPORTRANGE");
-
-                if (isArrayFormula) {
-                    // ARRAY FORMULA: Keep ONLY in Row 2!
-                    // Clear rows 3+ in this column so the array formula has room to expand downward without #REF! errors
-                    if (numRecruiters > 1) {
-                        try {
-                            sheet.getRange(3, c, numRecruiters - 1, 1).clearContent();
-                        } catch (e) { }
-                    }
-                } else {
-                    // REGULAR SINGLE-CELL FORMULA: copy down from Row 2 to rows 3..numRecruiters+1
-                    if (numRecruiters > 1) {
-                        try {
-                            sheet.getRange(2, c).copyTo(
-                                sheet.getRange(3, c, numRecruiters - 1, 1),
-                                SpreadsheetApp.CopyPasteType.PASTE_FORMULA,
-                                false
-                            );
-                        } catch (e) {
-                            Logger.log(`Formula copy error on col ${c}: ${e}`);
-                        }
-                    }
-                }
-            }
-
-            // Clear old push markers (Pushed, ID, Push Date) from row 2 down
-            markerCols.forEach(colIdx => {
+        // 2. Clear template dummy data and old static values in non-formula columns
+        // This ensures dummy values in Row 2 (e.g. 591, 9995, Sent, Abigail Ibabao, YES, 73, etc.) are completely cleared!
+        const totalRowsToClean = Math.max(maxRow >= 2 ? maxRow - 1 : 1, numRecruiters);
+        for (let c = 1; c <= lastCol; c++) {
+            const formula = sampleFormulas[c - 1];
+            // If it's NOT a formula column and NOT Name/Email/Bonus, clear all rows so template/dummy data is removed
+            if (!formula && c !== nameCol && c !== emailCol && c !== bonusCol) {
                 try {
-                    sheet.getRange(2, colIdx, numRecruiters, 1).clearContent();
+                    sheet.getRange(2, c, totalRowsToClean, 1).clearContent();
                 } catch (e) { }
-            });
-
-            // If the old sheet had extra rows beyond the new recruiters, clear them
-            if (maxRow > numRecruiters + 1) {
-                const extraRows = maxRow - (numRecruiters + 1);
-                sheet.getRange(numRecruiters + 2, 1, extraRows, sheet.getMaxColumns()).clearContent();
             }
+        }
 
-        } else {
-            // =========================================================================
-            // EXISTING LOWER COUNCIL SHEET: Update in-place, preserve all manual team data
-            // =========================================================================
-            // Clean up rows 3+ for any ARRAYFORMULA columns to resolve #REF! collisions
-            const row2Formulas = sheet.getRange(2, 1, 1, lastCol).getFormulas()[0] || [];
-            for (let c = 1; c <= lastCol; c++) {
-                const formula = row2Formulas[c - 1] || "";
-                if (!formula) continue;
+        // 3. Write Name, gingeremail, and Recruiter Bonus starting at Row 2 (replaces template data in row 2)
+        sheet.getRange(2, nameCol, names.length, 1).setValues(names);
+        sheet.getRange(2, emailCol, emails.length, 1).setValues(emails);
+        sheet.getRange(2, bonusCol, bonuses.length, 1).setValues(bonuses);
 
-                const fUpper = formula.toUpperCase();
-                const isArrayFormula = fUpper.includes("ARRAYFORMULA") ||
-                    fUpper.includes("FILTER(") ||
-                    fUpper.includes("QUERY(") ||
-                    fUpper.includes("BYROW(") ||
-                    fUpper.includes("MAP(") ||
-                    fUpper.includes("IMPORTRANGE");
+        // Format Recruiter Bonus as currency
+        sheet.getRange(2, bonusCol, bonuses.length, 1)
+            .setNumberFormat("₱#,##0.00")
+            .setFontWeight("bold");
 
-                if (isArrayFormula && maxRow > 2) {
+        // 4. Auto-fill or clear formula columns
+        for (let c = 1; c <= lastCol; c++) {
+            const formula = sampleFormulas[c - 1];
+            if (!formula) continue;
+
+            const fUpper = formula.toUpperCase();
+            const isArrayFormula = fUpper.includes("ARRAYFORMULA") ||
+                fUpper.includes("FILTER(") ||
+                fUpper.includes("QUERY(") ||
+                fUpper.includes("BYROW(") ||
+                fUpper.includes("MAP(") ||
+                fUpper.includes("IMPORTRANGE");
+
+            if (isArrayFormula) {
+                // Ensure ARRAYFORMULA is in Row 2
+                if (!row2Formulas[c - 1]) sheet.getRange(2, c).setFormula(formula);
+                // Clear rows 3+ so array formula can expand freely without #REF! errors
+                if (totalRowsToClean > 1) {
                     try {
-                        sheet.getRange(3, c, maxRow - 2, 1).clearContent();
+                        sheet.getRange(3, c, totalRowsToClean - 1, 1).clearContent();
                     } catch (e) { }
                 }
-            }
-
-            const numRows = maxRow - 1;
-            const bonusValues = [];
-            for (let r = 0; r < numRows; r++) {
-                bonusValues.push([0]);
-            }
-
-            const newRecruiters = [];
-
-            recruitersList.forEach(item => {
-                const totalRounded = Math.round(item.totalBonus * 100) / 100;
-                grandTotal += totalRounded;
-
-                const u = item.recruiterUser;
-                let fullName = u?.name || "";
-                if (u?.firstName || u?.lastName) {
-                    fullName = [u.firstName, u.lastName].filter(Boolean).join(" ");
+            } else {
+                // Single-cell formula:
+                if (!row2Formulas[c - 1]) {
+                    try {
+                        sheet.getRange(3, c).copyTo(sheet.getRange(2, c), SpreadsheetApp.CopyPasteType.PASTE_FORMULA, false);
+                    } catch (e) { }
                 }
-                const primaryEmail = item.email;
-                const gingerEmail = u?.gingerEmail || primaryEmail;
-
-                let rowNum = findExistingRow(item);
-                if (!rowNum && fullName) {
-                    const fnLower = fullName.toLowerCase().trim();
-                    if (existingNameMap.has(fnLower)) {
-                        rowNum = existingNameMap.get(fnLower);
+                // Copy from Row 2 down to all recruiter rows
+                if (numRecruiters > 1) {
+                    try {
+                        sheet.getRange(2, c).copyTo(
+                            sheet.getRange(3, c, numRecruiters - 1, 1),
+                            SpreadsheetApp.CopyPasteType.PASTE_FORMULA,
+                            false
+                        );
+                    } catch (e) {
+                        Logger.log(`Formula copy error on col ${c}: ${e}`);
                     }
                 }
-
-                if (rowNum && rowNum <= maxRow) {
-                    bonusValues[rowNum - 2] = [totalRounded];
-                    updatedCount++;
-                } else {
-                    newRecruiters.push({
-                        name: fullName || "N/A",
-                        email: gingerEmail,
-                        bonus: totalRounded
-                    });
-                }
-            });
-
-            // Write all bonus values to bonusCol in ONE batch call
-            sheet.getRange(2, bonusCol, bonusValues.length, 1).setValues(bonusValues);
-
-            // Append any new recruiters not currently in the sheet
-            if (newRecruiters.length > 0) {
-                let nextRow = maxRow + 1;
-                newRecruiters.forEach(rec => {
-                    sheet.getRange(nextRow, nameCol).setValue(rec.name);
-                    sheet.getRange(nextRow, emailCol).setValue(rec.email);
-                    sheet.getRange(nextRow, bonusCol).setValue(rec.bonus);
-                    nextRow++;
-                    insertedCount++;
-                });
             }
+        }
 
-            // Format Recruiter Bonus as currency
-            const finalLastRow = sheet.getLastRow();
-            if (finalLastRow >= 2) {
-                sheet.getRange(2, bonusCol, finalLastRow - 1, 1)
-                    .setNumberFormat("₱#,##0.00")
-                    .setFontWeight("bold");
-            }
+        // 5. If the old sheet had extra rows beyond the current recruiters, clear them completely
+        if (maxRow > numRecruiters + 1) {
+            const extraRows = maxRow - (numRecruiters + 1);
+            sheet.getRange(numRecruiters + 2, 1, extraRows, sheet.getMaxColumns()).clearContent();
         }
 
         // Freeze header row
@@ -456,8 +341,7 @@ function pullDataToLowerCouncil(isAuto = false) {
 
         const summaryMsg = `✅ Lower Council Referral Bonus Pull Complete!\n\n`
             + `Cutoff: ${targetCutoff}\n`
-            + `👥 Members Updated: ${updatedCount}\n`
-            + `➕ New Members Added: ${insertedCount}\n`
+            + `👥 Members Loaded: ${numRecruiters}\n`
             + `💰 Total Referral Bonus: ₱${grandTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
         if (isAuto) {
