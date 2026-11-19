@@ -862,11 +862,16 @@ io.on("connection", (socket) => {
     broadcastOnlineCount(io);
     broadcastChatWidgetCount(io);
 
-    // Re-attach checker if they reconnected (e.g. background tab throttling, network hop, page refresh)
+    // Only re-attach checker if previous checker socket is actually disconnected
+    const existingCheckerSocket = activeLivestreamSession?.checkerSocketId
+      ? io.sockets.sockets.get(activeLivestreamSession.checkerSocketId)
+      : null;
+
     if (
       activeLivestreamSession &&
       activeLivestreamSession.checkerEmail &&
-      activeLivestreamSession.checkerEmail.toLowerCase() === socket.user.email.toLowerCase()
+      activeLivestreamSession.checkerEmail.toLowerCase() === socket.user.email.toLowerCase() &&
+      (!existingCheckerSocket || !existingCheckerSocket.connected)
     ) {
       if (activeLivestreamSession.disconnectTimer) {
         clearTimeout(activeLivestreamSession.disconnectTimer);
@@ -1930,6 +1935,24 @@ io.on("connection", (socket) => {
     broadcastLivestreamState(io);
     socket.to("room:livestream").emit("livestream:stream_available");
     broadcastLivestreamViewerCount(io);
+  });
+
+  socket.on("livestream:checker_reconnect", (data) => {
+    const userEmail = (socket.user?.email || "").trim().toLowerCase();
+    const activeEmail = (activeLivestreamSession?.checkerEmail || "").trim().toLowerCase();
+    if (activeLivestreamSession && userEmail && activeEmail && userEmail === activeEmail) {
+      if (activeLivestreamSession.disconnectTimer) {
+        clearTimeout(activeLivestreamSession.disconnectTimer);
+        activeLivestreamSession.disconnectTimer = null;
+      }
+      activeLivestreamSession.isDisconnected = false;
+      activeLivestreamSession.checkerSocketId = socket.id;
+      if (data?.title) activeLivestreamSession.title = data.title;
+      if (data?.projectType) activeLivestreamSession.projectType = data.projectType;
+      console.log(`[Livestream] Checker ${socket.user.email} explicitly reclaimed live broadcast on socket ${socket.id}`);
+      broadcastLivestreamState(io);
+      io.to("room:livestream").emit("livestream:checker_reconnected");
+    }
   });
 
   // Start a Replay Library video as a synced looping Live broadcast
