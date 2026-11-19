@@ -685,17 +685,110 @@ export default function OnboardingDashboardPage() {
 
   // ── Step 1 download rows
   const DOWNLOAD_ROWS: DownloadRow[] = [
-    { id: "step1_dl1", num: "01", sectionTitle: "DOWNLOAD 7-ZIP", label: "7-zip for Windows", href: "https://www.7-zip.org/a/7z2301-x64.exe" },
-    { id: "step1_dl2", num: "02", sectionTitle: "DOWNLOAD VC-REDISTS", label: "VC-Redists", href: "https://www.techpowerup.com/download/visual-c-redistributable-runtime-package-all-in-one/" },
-    { id: "step1_dl3", num: "03", sectionTitle: "DOWNLOAD GINGER SOFTWARE", label: "Ginger Software", href: "https://www.mediafire.com/folder/giykm5tceipcr/Latest_Ginger" },
+    {
+      id: "step1_dl1",
+      num: "01",
+      sectionTitle: "DOWNLOAD GINGER ALL-IN-ONE INSTALLER",
+      label: "Ginger Installer (.exe)",
+      href: "https://github.com/Xfnite/Xnite/releases/latest/download/ginger_installer.exe",
+    },
+  ];
+
+  const DOWNLOAD_GUIDE_STEPS: InstallBlock[] = [
+    {
+      id: "dl-guide-1",
+      texts: [
+        "Step 1: Look at the top header bar",
+        "In the top-right area of your screen, look for the green Download Software button in the header.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/header/header-step1.webp",
+      imageAlt: "Top header bar showing the Download Software button",
+    },
+    {
+      id: "dl-guide-2",
+      texts: [
+        "Step 2: Click the Download Software button",
+        "Click the green Download Software button in the header to open the software download window.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/header/header-step2.webp",
+      imageAlt: "Download Software button in the header",
+    },
+    {
+      id: "dl-guide-3",
+      texts: [
+        "Step 3: Click Download Ginger Installer (.exe)",
+        "In the pop-up window, click the green Download Ginger Installer (.exe) button to start your download.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/header/header-step3.webp",
+      imageAlt: "Download Ginger Software modal",
+    },
+    {
+      id: "dl-guide-4",
+      texts: [
+        "Step 4: Wait for the download to finish",
+        "Your browser will begin downloading ginger_installer.exe (around 513 MB). Wait until it finishes, then continue to Install Software.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/header/header-step4.webp",
+      imageAlt: "Browser downloading ginger_installer.exe",
+    },
   ];
 
   // ── Step 2 install image blocks
   const INSTALL_BLOCKS: InstallBlock[] = [
-    { id: "7zip", texts: ["Step 1: Install 7-zip"], imageUrl: "https://biltph.com/training/_assets/media/0c4bf9d21bc96023390cb61184e78854.png", imageAlt: "Install 7-zip screenshot" },
-    { id: "extract-vc", texts: ["Step 2: Right Click Visual-C-Runtimes-All-in-One.zip", "Step 3: Choose 7-zip and Click 'Extract Here'"], imageUrl: "https://biltph.com/training/_assets/media/05bdc516dbc075ed965ea6850bdda323.png", imageAlt: "Extract VC Redists screenshot" },
-    { id: "run-bat", texts: ["Step 4: Open Visual-C-Runtimes-All-in-One Folder", "Step 5: Run Install_all.bat and wait till Installation finishes"], imageUrl: "https://biltph.com/training/_assets/media/1b241beeb66cf40476e6caf17c2cf885.jpg", imageAlt: "Run install bat screenshot" },
-    { id: "extract-ginger", texts: ["Step 6: Right Click Ginger.zip", "Step 7: Choose 7-zip and Click 'Extract Here'"], imageUrl: "https://biltph.com/training/_assets/media/e02d8c01e61af7f33b12172e98fd2446.png", imageAlt: "Extract Ginger screenshot" },
+    {
+      id: "install-step1",
+      texts: [
+        "Step 1: Find and open the installer",
+        "Go to your Downloads folder and double-click ginger_installer.exe. If Windows asks for permission to run it, click Yes.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/install/step1-installer-file.webp",
+      imageAlt: "ginger_installer.exe in File Explorer",
+    },
+    {
+      id: "install-step2",
+      texts: [
+        "Step 2: Choose where to save Ginger",
+        "Leave the default folder path as C:\\Users\\Public\\Desktop\\Ginger so everything stays easy to find, then click Next.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/install/step2-select-location.webp",
+      imageAlt: "Select Destination Location screen",
+    },
+    {
+      id: "install-step3",
+      texts: [
+        "Step 3: Start the installation",
+        "Review the destination folder shown on screen and click Install to begin.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/install/step3-ready-to-install.webp",
+      imageAlt: "Ready to Install screen",
+    },
+    {
+      id: "install-step4",
+      texts: [
+        "Step 4: Wait while the setup installs everything",
+        "Ginger and all required Microsoft Visual C++ files will install automatically. Please wait and do not click Cancel while this runs.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/install/step4-installing-runtimes.webp",
+      imageAlt: "Installing Microsoft Visual C++ Redistributable progress screen",
+    },
+    {
+      id: "install-step5",
+      texts: [
+        "Step 5: Finish the setup",
+        "When you see Completing the Ginger Setup Wizard, choose whether to restart now or later, then click Finish. Restarting your computer is recommended so everything runs smoothly.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/install/step5-finish-wizard.webp",
+      imageAlt: "Completing the Ginger Setup Wizard screen",
+    },
+    {
+      id: "install-step6",
+      texts: [
+        "Step 6: Check your Desktop shortcuts",
+        "Once finished, you will see the Ginger folder along with Ginger 2D.exe, Ginger 3D Roof.exe, Ginger 3DM.exe, and Reset Ginger Task.exe right on your Desktop.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/install/step6-desktop-shortcuts.webp",
+      imageAlt: "Ginger Desktop shortcuts",
+    },
   ];
 
 
@@ -1042,6 +1135,7 @@ export default function OnboardingDashboardPage() {
             checkedItems={getCheckedItems(mod.id)}
             onChecklistItem={(itemId, value) => markChecklistItem(mod.id, itemId, value)}
             downloadRows={mod.id === "download" ? DOWNLOAD_ROWS : []}
+            downloadGuide={mod.id === "download" ? DOWNLOAD_GUIDE_STEPS : []}
             videoItems={mod.id === "videos-basic" ? BASIC_VIDEO_ITEMS_UI : mod.id === "videos-3d" ? ADVANCED_ITEMS_UI : []}
             activeSubItemIndex={isVideoStep ? activeSubItemIndex : undefined}
             watchedItems={getModuleVideoWatched(mod.id)}
@@ -1057,6 +1151,63 @@ export default function OnboardingDashboardPage() {
             isLocked={locked}
             onComplete={() => markModuleComplete(mod.id)}
           />
+
+          {mod.id === "install" && (
+            <details className="mt-6 rounded-2xl border border-black/10 dark:border-white/10 bg-white dark:bg-[#0D1B2A] shadow-sm overflow-hidden">
+              <summary className="px-5 py-4 cursor-pointer select-none flex items-center justify-between gap-3 hover:bg-black/[0.02] dark:hover:bg-white/[0.02] transition-colors">
+                <div>
+                  <p className="text-sm font-bold text-[#0D1B2A] dark:text-white">
+                    Optional Troubleshooting Guide: What is Reset Ginger Task.exe?
+                  </p>
+                  <p className="text-xs text-black/60 dark:text-white/60 mt-0.5">
+                    You do NOT need to run this during installation. Only open this guide if a task gets stuck or freezes later.
+                  </p>
+                </div>
+                <span className="text-xs font-semibold text-[#1F7A1F] dark:text-[#55f761] whitespace-nowrap">
+                  View Guide
+                </span>
+              </summary>
+              <div className="border-t border-black/8 dark:border-white/8 px-5 py-5 space-y-5 bg-black/[0.01] dark:bg-black/20">
+                {[
+                  {
+                    title: "Step 1: Open Reset Ginger Task.exe",
+                    desc: "Find Reset Ginger Task.exe on your Desktop and double-click it whenever your current task has an error or gets stuck.",
+                    img: "https://bucket.xfnite.cloud/onboarding/reset/reset1-shortcut.webp",
+                    alt: "Reset Ginger Task.exe Desktop shortcut",
+                  },
+                  {
+                    title: "Step 2: Confirm the reset",
+                    desc: "A pop-up window will ask if you want to reset your current task. Click OK to continue. Do not worry, any tasks you already submitted will NOT be deleted.",
+                    img: "https://bucket.xfnite.cloud/onboarding/reset/reset2-confirm.webp",
+                    alt: "Reset Ginger Task confirmation dialog",
+                  },
+                  {
+                    title: "Step 3: Reopen Ginger or Roof",
+                    desc: "When you see Task Reset Complete, click OK. You can now open Ginger 2D, Ginger 3DM, or Ginger 3D Roof to start fresh.",
+                    img: "https://bucket.xfnite.cloud/onboarding/reset/reset3-complete.webp",
+                    alt: "Task Reset Complete dialog",
+                  },
+                ].map((step, idx) => (
+                  <div key={idx} className="flex flex-col md:flex-row gap-4 items-start">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-black/85 dark:text-white/85">{step.title}</p>
+                      <p className="text-sm text-black/70 dark:text-white/70 mt-1 leading-relaxed">{step.desc}</p>
+                    </div>
+                    <div className="w-full md:w-[52%] flex-shrink-0">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={step.img}
+                        alt={step.alt}
+                        loading="lazy"
+                        className="w-full rounded-xl border border-black/10 dark:border-white/10 object-contain bg-black/5 dark:bg-black/40"
+                        style={{ maxHeight: "240px" }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
 
           {/* Navigation */}
           <div className="mt-auto pt-8 flex items-center justify-between">

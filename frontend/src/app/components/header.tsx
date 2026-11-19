@@ -500,7 +500,7 @@ export default function Header({ userName, userEmail, isLoggingOut, onLogout, on
                         <div className="flex justify-between items-center p-5 border-b border-[#1B263B]/10 dark:border-[#E0E1DD]/10 bg-black/[0.02] dark:bg-white/[0.02]">
                             <div>
                                 <h2 className="text-lg font-black text-[#0D1B2A] dark:text-white">Download Ginger Software</h2>
-                                <p className="text-xs text-gray-500 mt-1">Select the software version suitable for your assigned tasks.</p>
+                                <p className="text-xs text-gray-500 mt-1">Download the latest All-in-One Ginger Installer for your tasks.</p>
                             </div>
                             <button
                                 onClick={() => setIsDownloadModalOpen(false)}
@@ -509,63 +509,35 @@ export default function Header({ userName, userEmail, isLoggingOut, onLogout, on
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
-                        
-                        <div className={`p-6 overflow-y-auto grid grid-cols-1 gap-6 ${isStandardBuildingPassed ? "md:grid-cols-2" : ""}`}>
-                            {/* 2D Ginger Software Card */}
+
+                        <div className="p-6 overflow-y-auto grid grid-cols-1 gap-6">
+                            {/* All-in-One Ginger Installer Card */}
                             <div className="flex flex-col justify-between p-5 rounded-2xl border border-[#1B263B]/10 dark:border-[#E0E1DD]/10 bg-gray-50 dark:bg-[#1B263B]/40 hover:border-[#1F7A1F]/30 dark:hover:border-[#55f761]/30 hover:shadow-md transition-all duration-300">
                                 <div className="mb-6">
                                     <div className="w-12 h-12 rounded-xl bg-[#1F7A1F]/10 dark:bg-[#55f761]/10 flex items-center justify-center mb-4">
                                         <svg className="w-6 h-6 text-[#1F7A1F] dark:text-[#55f761]" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                                         </svg>
                                     </div>
-                                    <h3 className="text-base font-bold text-[#0D1B2A] dark:text-white mb-2">2D Ginger Software</h3>
+                                    <h3 className="text-base font-bold text-[#0D1B2A] dark:text-white mb-2">Ginger All-in-One Installer</h3>
                                     <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
-                                        Download 2D ginger software for Standard Building Repair, Landcover, Transportation, and Centerline tasks.
+                                        {isStandardBuildingPassed
+                                            ? "Includes Ginger 2D, Ginger 3DM, Ginger 3D Roof, Reset Ginger Task, and all required Visual C++ runtimes in one installer."
+                                            : "Includes Ginger 2D, Reset Ginger Task, and all required Visual C++ runtimes in one installer."}
                                     </p>
                                 </div>
                                 <a
-                                    href="https://www.mediafire.com/folder/giykm5tceipcr/Latest_Ginger"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
+                                    href="https://github.com/Xfnite/Xnite/releases/latest/download/ginger_installer.exe"
+                                    download="ginger_installer.exe"
                                     onClick={() => setIsDownloadModalOpen(false)}
                                     className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-all bg-[#1F7A1F] hover:bg-[#145214] text-white dark:bg-[#55f761] dark:hover:bg-[#3de34a] dark:text-[#0D1B2A] cursor-pointer"
                                 >
-                                    Download 2D Ginger Software
+                                    Download Ginger Installer (.exe)
                                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                                     </svg>
                                 </a>
                             </div>
-
-                            {/* 3D Ginger Software Card — passers only */}
-                            {isStandardBuildingPassed && (
-                            <div className="flex flex-col justify-between p-5 rounded-2xl border border-[#1B263B]/10 dark:border-[#E0E1DD]/10 bg-gray-50 dark:bg-[#1B263B]/40 hover:border-purple-500/30 dark:hover:border-purple-400/30 hover:shadow-md transition-all duration-300">
-                                <div className="mb-6">
-                                    <div className="w-12 h-12 rounded-xl bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center mb-4">
-                                        <svg className="w-6 h-6 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                                        </svg>
-                                    </div>
-                                    <h3 className="text-base font-bold text-[#0D1B2A] dark:text-white mb-2">3D Ginger Software</h3>
-                                    <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
-                                        Download 3D ginger software for 3D Matching, and 3dr roof tasks.
-                                    </p>
-                                </div>
-                                <a
-                                    href="https://drive.google.com/file/d/1rG_TOUxdzBr0-RymnPrttTpx-mDKGz8m/view?usp=sharing"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    onClick={() => setIsDownloadModalOpen(false)}
-                                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition-all bg-purple-600 hover:bg-purple-700 text-white dark:bg-purple-500 dark:hover:bg-purple-400 cursor-pointer"
-                                >
-                                    Download 3D Ginger Software
-                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                                    </svg>
-                                </a>
-                            </div>
-                            )}
                         </div>
 
                         <div className="p-4 border-t border-[#1B263B]/10 dark:border-[#E0E1DD]/10 bg-black/[0.02] dark:bg-white/[0.02] flex justify-end">
@@ -573,7 +545,7 @@ export default function Header({ userName, userEmail, isLoggingOut, onLogout, on
                                 onClick={() => setIsDownloadModalOpen(false)}
                                 className="px-5 py-2 border border-[#1B263B]/10 dark:border-[#E0E1DD]/10 hover:bg-black/5 dark:hover:bg-white/5 text-[#2F3E46] dark:text-[#E0E1DD]/80 rounded-xl text-sm font-bold transition-all cursor-pointer"
                             >
-                                Cancel
+                                Close
                             </button>
                         </div>
                     </div>

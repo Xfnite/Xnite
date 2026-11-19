@@ -146,6 +146,7 @@ interface TrainingModuleCardProps {
 
   // download variant
   downloadRows?: DownloadRow[];
+  downloadGuide?: InstallBlock[];
 
   // install-visual variant
   installBlocks?: InstallBlock[];
@@ -231,6 +232,7 @@ export default function TrainingModuleCard(props: TrainingModuleCardProps) {
     checklistItems = [], checkedItems = {}, onChecklistItem,
     subItems = [], openedItems = {}, onSubItemOpen,
     downloadRows = [],
+    downloadGuide = [],
     installBlocks = [],
     videoItems = [], activeSubItemIndex, watchedItems = {}, onVideoProgress, onReach25,
     onPlay, onPlayingStateChange, onTimeUpdate, onVideoEnded, playSignal,
@@ -526,6 +528,40 @@ export default function TrainingModuleCard(props: TrainingModuleCardProps) {
               );
             })}
           </div>
+
+          {downloadGuide.length > 0 && (
+            <div className="mt-6 pt-5 border-t border-black/8 dark:border-white/8">
+              <div className="text-[11px] font-bold uppercase tracking-widest text-black/50 dark:text-white/50 mb-4">
+                How to Download (Step by Step)
+              </div>
+              <div className="space-y-4">
+                {downloadGuide.map((step, idx) => (
+                  <div key={step.id}>
+                    {idx > 0 && <div className="border-t border-black/5 dark:border-white/5 my-4" />}
+                    <div className="flex flex-col md:flex-row gap-4 items-start">
+                      <div className="flex-1 min-w-0 space-y-1">
+                        {step.texts.map((line, li) => (
+                          <p key={li} className="text-sm leading-relaxed font-medium text-black/85 dark:text-white/85">
+                            {line}
+                          </p>
+                        ))}
+                      </div>
+                      <div className="w-full md:w-[52%] flex-shrink-0">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={step.imageUrl}
+                          alt={step.imageAlt ?? "Download step screenshot"}
+                          loading="lazy"
+                          className="w-full rounded-xl border border-black/10 dark:border-white/10 object-contain bg-black/5 dark:bg-black/40"
+                          style={{ maxHeight: "260px" }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Mark complete appears below once all done */}
           {allDownloadsDone && (
