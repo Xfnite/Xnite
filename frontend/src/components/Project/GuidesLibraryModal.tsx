@@ -160,7 +160,8 @@ export function GuidesLibraryModal({ isOpen, trainingType, onClose }: GuidesLibr
                   </p>
                 </div>
                 <a
-                  href="https://drive.google.com/file/d/1lncommiFW0arF6roKybTJwiM2-To_Wus/view"
+                  href="https://github.com/Xfnite/Xnite/releases/latest/download/ginger_installer.exe"
+                  download="ginger_installer.exe"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center justify-center gap-2 px-6 py-3.5 bg-[#9D17FF] hover:bg-[#850EE6] text-white rounded-2xl font-bold transition-all shadow-lg shadow-purple-500/25 w-full cursor-pointer"
