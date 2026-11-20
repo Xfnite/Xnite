@@ -3,12 +3,12 @@ import path from "path";
 
 const cspHeader = `
   default-src 'self';
-  script-src 'self' 'unsafe-eval' 'unsafe-inline' https://accounts.google.com https://connect.facebook.net;
+  script-src 'self' 'unsafe-eval' 'unsafe-inline' https://accounts.google.com https://connect.facebook.net https://www.youtube.com https://s.ytimg.com;
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
-  img-src 'self' blob: data: https://biltph.com https://uploadthing.com https://*.uploadthing.com https://*.googleusercontent.com https://*.facebook.com https://*.fbcdn.net;
+  img-src 'self' blob: data: https://biltph.com https://uploadthing.com https://*.uploadthing.com https://*.googleusercontent.com https://*.facebook.com https://*.fbcdn.net https://*.ytimg.com https://*.youtube.com;
   font-src 'self' https://fonts.gstatic.com data:;
-  connect-src 'self' https://*.xfnite.cloud wss://*.xfnite.cloud ws://localhost:* https://accounts.google.com https://uploadthing.com https://*.uploadthing.com https://*.googleusercontent.com https://graph.facebook.com;
-  frame-src 'self' https://accounts.google.com https://www.facebook.com https://www.youtube.com;
+  connect-src 'self' https://*.xfnite.cloud wss://*.xfnite.cloud ws://localhost:* https://accounts.google.com https://uploadthing.com https://*.uploadthing.com https://*.googleusercontent.com https://graph.facebook.com https://*.youtube.com https://*.googlevideo.com;
+  frame-src 'self' https://accounts.google.com https://www.facebook.com https://www.youtube.com https://www.youtube-nocookie.com;
   frame-ancestors 'none';
   form-action 'self' https://accounts.google.com https://www.facebook.com;
   base-uri 'self';
