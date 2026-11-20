@@ -281,6 +281,11 @@ export function ActiveProjectsTab({
       if (isManualNavigating.current) {
         return () => clearInterval(fallbackTimer);
       }
+      if (tutProgress?.project_walkthrough_completed === true || tutProgress?.active_projects_start_walkthrough_completed === true) {
+        if (walkthroughStep !== -1) setWalkthroughStep(-1);
+        return () => clearInterval(fallbackTimer);
+      }
+
       if (walkthroughStep === -1 || walkthroughStep === 2 || walkthroughStep === 3 || walkthroughStep === 4) {
         const lcOpened = tutProgress.tut_lc_opened === true || (isLandCoverOngoing && tutProgress.tut_lc_closed !== true);
         const lcClosed = tutProgress.tut_lc_closed === true;
@@ -1849,7 +1854,7 @@ export function ActiveProjectsTab({
       />
 
       {/* Walkthrough Tooltip Overlay */}
-      {walkthroughStep >= 0 && (
+      {walkthroughStep >= 0 && !tutProgress?.project_walkthrough_completed && (
         <>
           {/* Backdrop overlay - covers the entire screen including sidebar for focus */}
           <div className="fixed inset-0 z-[9999] bg-black/85 transition-all duration-300 pointer-events-none" />

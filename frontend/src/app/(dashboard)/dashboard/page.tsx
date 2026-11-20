@@ -903,7 +903,10 @@ export default function OnboardingDashboardPage() {
       // noop — handled below
     } else {
       if (progress.onboardingComplete && !isPreview) {
-        return <CompletionBanner onNavigate={() => router.push(isStandardBuildingPassed ? "/project" : "/account?trigger_walkthrough=true")} isStandardBuildingPassed={isStandardBuildingPassed} />;
+        const hasTutCompleted = (dbProgress as any)?.activeProjectsTutorialProgress?.account_walkthrough_completed === true ||
+          (typeof window !== "undefined" && localStorage.getItem("account_walkthrough_completed") === "true");
+        const accountTarget = hasTutCompleted ? "/account" : "/account?trigger_walkthrough=true";
+        return <CompletionBanner onNavigate={() => router.push(isStandardBuildingPassed ? "/project" : accountTarget)} isStandardBuildingPassed={isStandardBuildingPassed} />;
       }
       return (
         <WelcomeCard

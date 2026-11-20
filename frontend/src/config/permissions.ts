@@ -22,7 +22,7 @@ export interface UserPermissionsContext {
 export const INNER_COUNCIL_MIN_PASSERS = 5;
 
 // Minimum claimable referral bonus (PHP) required before a withdrawal is allowed.
-export const REFERRAL_BONUS_MIN_WITHDRAW = 1500;
+export const REFERRAL_BONUS_MIN_WITHDRAW = 500;
 
 // 1. Core Role Normalizers
 export function getNormalizedRole(role?: string): SystemRole {
