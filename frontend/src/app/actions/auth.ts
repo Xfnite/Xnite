@@ -357,27 +357,7 @@ export async function logoutAction() {
     const cookieStore = await cookies();
     const token = cookieStore.get("ginger_access_token")?.value;
 
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-    };
-
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-
-    // 1ï¸âƒ£ Forward the logout request to the real Ginger logout endpoint
-    const gingerRes = await fetch(GINGER_LOGOUT_ENDPOINT, {
-      method: "POST",
-      headers,
-    });
-
-    const gingerData = await gingerRes.json().catch(() => ({}));
-
-    if (!gingerRes.ok) {
-      return { success: false, error: gingerData.error ?? "Logout failed on Ginger API" };
-    }
-
-    // Clear the cookie
+    // 1. Unconditionally clear all local session cookies first
     cookieStore.delete("ginger_access_token");
     cookieStore.delete("xnite_session");
     cookieStore.delete("pre_course_completed");
@@ -387,7 +367,23 @@ export async function logoutAction() {
     cookieStore.delete("signup_first_name");
     cookieStore.delete("signup_last_name");
 
-    return { success: true, data: gingerData };
+    // 2. Best-effort notify upstream Ginger API without blocking local logout
+    if (token) {
+      try {
+        await fetch(GINGER_LOGOUT_ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          signal: AbortSignal.timeout(5000),
+        }).catch((err) => console.warn("Upstream Ginger logout notification failed:", err));
+      } catch (gingerErr) {
+        console.warn("Error notifying Ginger logout:", gingerErr);
+      }
+    }
+
+    return { success: true };
   } catch (err) {
     console.error("Logout action error:", err);
     return { success: false, error: "Unexpected server error" };

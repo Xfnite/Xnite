@@ -31,6 +31,7 @@ import { isGenuineQuestion, classifyFaq } from "./utils/faqClassifier.js";
 dotenv.config();
 
 const app = express();
+app.disable("x-powered-by");
 app.set("trust proxy", 1); // Trust first proxy (e.g. Traefik/Nginx in Dokploy)
 const PORT = process.env.PORT || 3001;
 

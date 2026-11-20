@@ -30,6 +30,15 @@ export const GET = withRateLimit(async (request: NextRequest) => {
 
   // 2. Handle callback if code is present
   if (code) {
+    const rawState = searchParams.get("state") || "";
+    const [actionFromState, nonceFromState] = rawState.includes(":") ? rawState.split(":") : [rawState, ""];
+    const expectedNonce = request.cookies.get("google_oauth_state")?.value;
+
+    // Validate OAuth CSRF state nonce
+    if (!nonceFromState || !expectedNonce || nonceFromState !== expectedNonce) {
+      console.warn("[Security] Blocked Google OAuth callback with invalid/missing state nonce (CSRF protection)");
+      return NextResponse.redirect(`${origin}/login?error=InvalidOAuthState`);
+    }
     try {
       if (!clientId || !clientSecret) {
         console.error("Missing Google Client ID or Secret in environment variables");
@@ -98,7 +107,7 @@ export const GET = withRateLimit(async (request: NextRequest) => {
       }
 
       // If they came from the signup page, redirect to the referrer collection page
-      if (state === "signup") {
+      if (actionFromState === "signup" || rawState === "signup") {
         const response = NextResponse.redirect(`${origin}/register?step=complete-profile`);
         response.cookies.set("signup_name", name, { path: "/", maxAge: 3600 });
         if (firstName) response.cookies.set("signup_first_name", firstName, { path: "/", maxAge: 3600 });
@@ -302,11 +311,20 @@ export const GET = withRateLimit(async (request: NextRequest) => {
   authUrl.searchParams.set('access_type', 'offline');
   authUrl.searchParams.set('prompt', 'consent');
 
-  // Pass the action (e.g. signup) via the state parameter so we can read it on callback
-  const action = searchParams.get("action");
-  if (action) {
-    authUrl.searchParams.set('state', action);
-  }
+  // Generate a cryptographically secure random state nonce to prevent OAuth CSRF attacks
+  const action = searchParams.get("action") || "login";
+  const nonce = crypto.randomUUID();
+  const statePayload = `${action}:${nonce}`;
+  authUrl.searchParams.set('state', statePayload);
 
-  return NextResponse.redirect(authUrl.toString());
+  const response = NextResponse.redirect(authUrl.toString());
+  response.cookies.set("google_oauth_state", nonce, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production" || origin.startsWith("https"),
+    sameSite: "lax",
+    path: "/",
+    maxAge: 600, // 10 minutes
+  });
+
+  return response;
 });

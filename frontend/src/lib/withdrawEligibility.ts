@@ -114,6 +114,10 @@ export function evaluateWithdrawEligibility(
     return { ok: false as const, error: "Status does not allow withdrawal", status: 400 };
   }
 
+  if (income.estimatedAmount <= 0) {
+    return { ok: false as const, error: "No claimable balance available to withdraw", status: 400 };
+  }
+
   if (isThresholdEnabled && income.estimatedAmount < threshold) {
     return { ok: false as const, error: "Withdrawal has not started yet", status: 400 };
   }
