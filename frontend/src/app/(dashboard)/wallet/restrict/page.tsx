@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ShieldAlert, Info, HandCoins, Megaphone, CheckCircle2 } from "lucide-react";
 import { io, Socket } from "socket.io-client";
+import { getSessionUser } from "@/app/actions/auth";
 
 const SOCKET_URL =
   process.env.NEXT_PUBLIC_SERVER_URL ||
@@ -79,38 +81,53 @@ export default function RestrictPage() {
     return [...shown, ...stored.filter(r => !covered.has(r)).map(r => `${r} (no switch on this page)`)];
   };
 
+  const router = useRouter();
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
+
   useEffect(() => {
-    fetchSettings();
-
-    // Connect socket for announcements
-    const token = getCookie("xnite_session");
-    if (token) {
-      socketRef.current = io(SOCKET_URL, {
-        auth: { token, client: "tool" },
-        transports: ["websocket"],
-      });
-
-      socketRef.current.on("announcement_sent", ({ success, count, message: msg }: { success: boolean; count?: number; message?: string }) => {
-        setIsSendingAnnouncement(false);
-        if (success) {
-          setAnnouncementSent(true);
-          toast.success(`Payout announcement sent to ${count} user(s).`);
-          setTimeout(() => setAnnouncementSent(false), 4000);
+    getSessionUser()
+      .then((user) => {
+        if (!user || user.role?.trim().toLowerCase() !== "admin") {
+          toast.error("Unauthorized: Admin privileges required.");
+          router.replace("/wallet");
         } else {
-          toast.error(msg || "Failed to send announcement.");
-        }
-      });
+          setIsAdmin(true);
+          fetchSettings();
 
-      socketRef.current.on("error_message", (errMsg: string) => {
-        setIsSendingAnnouncement(false);
-        toast.error(errMsg);
+          // Connect socket for announcements only for verified admin
+          const token = getCookie("xnite_session");
+          if (token) {
+            socketRef.current = io(SOCKET_URL, {
+              auth: { token, client: "tool" },
+              transports: ["websocket"],
+            });
+
+            socketRef.current.on("announcement_sent", ({ success, count, message: msg }: { success: boolean; count?: number; message?: string }) => {
+              setIsSendingAnnouncement(false);
+              if (success) {
+                setAnnouncementSent(true);
+                toast.success(`Payout announcement sent to ${count} user(s).`);
+                setTimeout(() => setAnnouncementSent(false), 4000);
+              } else {
+                toast.error(msg || "Failed to send announcement.");
+              }
+            });
+
+            socketRef.current.on("error_message", (errMsg: string) => {
+              setIsSendingAnnouncement(false);
+              toast.error(errMsg);
+            });
+          }
+        }
+      })
+      .catch(() => {
+        router.replace("/wallet");
       });
-    }
 
     return () => {
       socketRef.current?.disconnect();
     };
-  }, []);
+  }, [router]);
 
   const fetchSettings = async () => {
     try {
@@ -699,7 +716,7 @@ export default function RestrictPage() {
     });
   };
 
-  if (isLoading) {
+  if (isLoading || isAdmin !== true) {
     return (
       <div className="w-full h-40 flex items-center justify-center">
         <div className="w-6 h-6 border-2 border-[#1F7A1F] dark:border-[#55f761] border-t-transparent rounded-full animate-spin"></div>

@@ -48,9 +48,13 @@ export const POST = withRateLimit(
       return NextResponse.json({ success: false, error: "No file provided" }, { status: 400 });
     }
 
-    // 4. Validate file type and size (max 10MB)
-    if (!file.type.startsWith("image/")) {
-      return NextResponse.json({ success: false, error: "Only image files are allowed" }, { status: 400 });
+    // 4. Validate file type and size (max 10MB, SVG blocked to prevent Stored XSS)
+    const allowedMimeTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"]);
+    if (!allowedMimeTypes.has(file.type.toLowerCase())) {
+      return NextResponse.json(
+        { success: false, error: "Only PNG, JPEG, WebP, or GIF image files are allowed (SVGs are not permitted)" },
+        { status: 400 }
+      );
     }
 
     const MAX_SIZE = 10 * 1024 * 1024; // 10MB
