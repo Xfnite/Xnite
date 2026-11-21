@@ -1,6 +1,6 @@
 "use server";
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { prisma } from "@/lib/db";
 import { generateUniqueCredentials } from "@/lib/generateUniqueCredentials";
 import { signSessionToken, verifySessionToken } from "@/lib/jwt";
@@ -23,16 +23,110 @@ const GINGER_USER_DETAIL_ENDPOINT = `${GINGER_BASE}/bac/eam/sale/user/detail`;
 const GINGER_SIGNUP_VALIDATE_ENDPOINT = `${GINGER_BASE}/bac/eam/koala/koala-user/user/signup-validate`;
 const GINGER_SIGNUP_ENDPOINT = `${GINGER_BASE}/bac/eam/koala/koala-user/user/signup`;
 
+// ─── Login Rate Limiting (Brute-Force & Credential Stuffing Defense) ─────────────
+const MAX_FAILED_LOGIN_PER_EMAIL = 5;
+const MAX_FAILED_LOGIN_PER_IP = 20;
+const LOGIN_LOCKOUT_SECONDS = 15 * 60; // 15 minutes lockout
+
+async function checkLoginRateLimit(
+  email: string,
+  clientIp: string
+): Promise<{ locked: boolean; waitMinutes?: number }> {
+  if (!isRedisReady()) return { locked: false };
+  try {
+    const emailKey = `ratelimit:login:email:${email}`;
+    const ipKey = `ratelimit:login:ip:${clientIp}`;
+
+    const [emailAttemptsStr, ipAttemptsStr] = await Promise.all([
+      redis.get(emailKey),
+      clientIp !== "unknown" ? redis.get(ipKey) : Promise.resolve(null),
+    ]);
+
+    const emailAttempts = emailAttemptsStr ? parseInt(emailAttemptsStr, 10) : 0;
+    const ipAttempts = ipAttemptsStr ? parseInt(ipAttemptsStr, 10) : 0;
+
+    if (emailAttempts >= MAX_FAILED_LOGIN_PER_EMAIL) {
+      const ttl = await redis.ttl(emailKey);
+      const waitMinutes = Math.max(1, Math.ceil(ttl / 60));
+      return { locked: true, waitMinutes };
+    }
+
+    if (ipAttempts >= MAX_FAILED_LOGIN_PER_IP) {
+      const ttl = await redis.ttl(ipKey);
+      const waitMinutes = Math.max(1, Math.ceil(ttl / 60));
+      return { locked: true, waitMinutes };
+    }
+
+    return { locked: false };
+  } catch (err) {
+    console.error("[RateLimit] checkLoginRateLimit error:", err);
+    return { locked: false };
+  }
+}
+
+async function recordFailedLogin(email: string, clientIp: string) {
+  if (!isRedisReady()) return;
+  try {
+    const emailKey = `ratelimit:login:email:${email}`;
+    const ipKey = `ratelimit:login:ip:${clientIp}`;
+
+    const pipe = redis.pipeline();
+    pipe.incr(emailKey);
+    pipe.expire(emailKey, LOGIN_LOCKOUT_SECONDS);
+
+    if (clientIp !== "unknown") {
+      pipe.incr(ipKey);
+      pipe.expire(ipKey, LOGIN_LOCKOUT_SECONDS);
+    }
+
+    await pipe.exec();
+  } catch (err) {
+    console.error("[RateLimit] recordFailedLogin error:", err);
+  }
+}
+
+async function clearFailedLogin(email: string) {
+  if (!isRedisReady()) return;
+  try {
+    const emailKey = `ratelimit:login:email:${email}`;
+    await redis.del(emailKey);
+  } catch (err) {
+    console.error("[RateLimit] clearFailedLogin error:", err);
+  }
+}
+
 export async function loginAction(formData: { email: string; password: string }) {
   try {
     const { email: rawEmail, password } = formData;
     const email = rawEmail.toLowerCase();
     const cookieStore = await cookies();
 
+    // 0️⃣ Rate Limit Check (Prevent Brute-Force Password Spraying)
+    let clientIp = "unknown";
+    try {
+      const reqHeaders = await headers();
+      clientIp =
+        reqHeaders.get("cf-connecting-ip") ||
+        reqHeaders.get("x-forwarded-for")?.split(",")[0].trim() ||
+        reqHeaders.get("x-real-ip") ||
+        "unknown";
+    } catch {
+      // fallback
+    }
+
+    const rateLimitCheck = await checkLoginRateLimit(email, clientIp);
+    if (rateLimitCheck.locked) {
+      return {
+        success: false,
+        error: `Too many failed login attempts. Please wait ${rateLimitCheck.waitMinutes} minute${rateLimitCheck.waitMinutes! > 1 ? "s" : ""} before trying again.`,
+      };
+    }
+
     // 1ï¸âƒ£ Fetch user from local DB
     const user = await prisma.user.findUnique({ where: { email } });
 
     if (!user) {
+      await recordFailedLogin(email, clientIp);
       return { success: false, error: "Invalid email or password" };
     }
 
@@ -53,6 +147,7 @@ export async function loginAction(formData: { email: string; password: string })
     const isNonLabelerWithCorrectGingerPassword = user.role !== "labeler" && isGingerPasswordCorrect;
 
     if (!isPasswordCorrect && !isNonLabelerWithCorrectGingerPassword) {
+      await recordFailedLogin(email, clientIp);
       return { success: false, error: "Invalid email or password" };
     }
 
@@ -119,6 +214,7 @@ export async function loginAction(formData: { email: string; password: string })
           maxAge: 60 * 60 * 24,
         });
 
+        await clearFailedLogin(email);
         return {
           success: true,
           data: resetResult.newGingerData || {},
@@ -208,6 +304,7 @@ export async function loginAction(formData: { email: string; password: string })
       ? (user.role !== "applicant" ? "/project" : "/account")
       : "/dashboard";
 
+    await clearFailedLogin(email);
     return { success: true, data: safeData, hasCompletedPreCourse, redirect: redirectPath };
 
   } catch (err) {
