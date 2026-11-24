@@ -46,6 +46,8 @@ logs.txt
 note.txt
 notfound
 scratch/
+Screenshot/
+/Screenshot/
 /public/uploads/
 
 # Database dumps (preserve prisma migrations)

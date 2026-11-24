@@ -63,10 +63,13 @@ const COMPLETABLE_MODULE_IDS = MODULE_IDS.filter((id) => id !== "live-session");
 
 // Checklist sub-items for Step 02 (install)
 export const INSTALL_CHECKLIST = [
-  { id: "7zip", label: 'Install 7-Zip (7z2301-x64.exe)' },
-  { id: "extract-vc", label: 'Right-click Visual-C-Runtimes-All-in-One.zip → 7-Zip → Extract Here' },
-  { id: "run-bat", label: 'Open Visual-C-Runtimes-All-in-One folder → Run install_all.bat and wait for installation to finish' },
-  { id: "extract-ginger", label: 'Right-click Ginger.zip → 7-Zip → Extract Here' },
+  { id: "antivirus-done", label: 'Configure Antivirus / Turn off Real-time protection' },
+  { id: "install-step1", label: 'Find and open ginger_installer.exe' },
+  { id: "install-step2", label: 'Select destination location' },
+  { id: "install-step3", label: 'Ready to install' },
+  { id: "install-step4", label: 'Installing runtimes and Ginger' },
+  { id: "install-step5", label: 'Finish installation' },
+  { id: "install-step6", label: 'Verify Desktop shortcuts' },
 ];
 
 // Sub-items for Step 03 (basic labeling videos)

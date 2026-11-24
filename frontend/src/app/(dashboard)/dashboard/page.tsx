@@ -44,7 +44,10 @@ const PREVIEW_VIDEO_KEYS = [
 ];
 const PREVIEW_PROGRESS = {
   modulesComplete: Object.fromEntries([...MODULES.map((m) => m.id), ANSWER_KEY_MOD_ID].map((id) => [id, true])),
-  checklistItems: Object.fromEntries(INSTALL_CHECKLIST.map((i) => [`install::${i.id}`, true])),
+  checklistItems: Object.fromEntries([
+    ...INSTALL_CHECKLIST.map((i) => [`install::${i.id}`, true]),
+    ["install::antivirus-done", true],
+  ]),
   subItemsOpened: Object.fromEntries([...DOWNLOAD_KEYS.map((k) => `download::${k}`), ...PREVIEW_VIDEO_KEYS].map((k) => [k, true])),
   moduleVideoWatched: Object.fromEntries(PREVIEW_VIDEO_KEYS.map((k) => [k, 100])),
   answerKeyProgress: Object.fromEntries(ANSWER_KEY_TASKS.map((t) => [t.taskId, true])),
@@ -723,6 +726,82 @@ export default function OnboardingDashboardPage() {
     },
   ];
 
+  // ── Step 2 Antivirus prerequisite guide (Highly suggested based on user experience)
+  const ANTIVIRUS_GUIDE_STEPS: InstallBlock[] = [
+    {
+      id: "av-step-1",
+      texts: [
+        "Step 1: Open the Windows Start Menu",
+        "Click the Windows Start icon on the bottom-left corner of your taskbar, or press the Windows key on your keyboard.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/antivirus/step1.webp",
+      imageAlt: "Windows desktop showing the Start button in taskbar",
+    },
+    {
+      id: "av-step-2",
+      texts: [
+        "Step 2: Search for Settings",
+        "Type 'Settings' in the search bar and click on the Settings app under Best match.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/antivirus/step2.webp",
+      imageAlt: "Typing settings in the Windows start menu search",
+    },
+    {
+      id: "av-step-3",
+      texts: [
+        "Step 3: Open Update & Security",
+        "In the Windows Settings window, find and click on 'Update & Security'.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/antivirus/step3.webp",
+      imageAlt: "Windows Settings window pointing to Update & Security",
+    },
+    {
+      id: "av-step-4",
+      texts: [
+        "Step 4: Select Windows Security",
+        "In the left-hand navigation menu, click on 'Windows Security' (shield icon).",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/antivirus/step4.webp",
+      imageAlt: "Update & Security sidebar with Windows Security highlighted",
+    },
+    {
+      id: "av-step-5",
+      texts: [
+        "Step 5: Click Virus & threat protection",
+        "Under Protection areas, click on 'Virus & threat protection'.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/antivirus/step5.webp",
+      imageAlt: "Windows Security protection areas showing Virus & threat protection",
+    },
+    {
+      id: "av-step-6",
+      texts: [
+        "Step 6: Click 'Manage settings' under Virus & threat protection",
+        "Scroll down to 'Virus & threat protection settings' and click the blue 'Manage settings' link.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/antivirus/step6.webp",
+      imageAlt: "Manage settings section in Windows Security",
+    },
+    {
+      id: "av-step-7",
+      texts: [
+        "Step 7: Locate Real-time protection",
+        "Find 'Real-time protection' at the top of the list. By default, the switch is turned 'On'.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/antivirus/step7.webp",
+      imageAlt: "Real-time protection toggle switch set to On",
+    },
+    {
+      id: "av-step-8",
+      texts: [
+        "Step 8: Turn Real-time protection to OFF",
+        "Toggle Real-time protection to 'Off'. When Windows prompts you with a User Account Control dialog, click 'Yes'. You can safely turn this back on after Ginger finishes installing.",
+      ],
+      imageUrl: "https://bucket.xfnite.cloud/onboarding/antivirus/step8.webp",
+      imageAlt: "Real-time protection toggle turned Off",
+    },
+  ];
+
   // ── Step 2 install image blocks
   const INSTALL_BLOCKS: InstallBlock[] = [
     {
@@ -1121,6 +1200,7 @@ export default function OnboardingDashboardPage() {
             primaryHref={mod.primaryHref}
             primaryLabel={mod.primaryLabel}
             installBlocks={mod.id === "install" ? INSTALL_BLOCKS : []}
+            antivirusGuide={mod.id === "install" ? ANTIVIRUS_GUIDE_STEPS : []}
             checklistItems={[]}
             checkedItems={getCheckedItems(mod.id)}
             onChecklistItem={(itemId, value) => markChecklistItem(mod.id, itemId, value)}

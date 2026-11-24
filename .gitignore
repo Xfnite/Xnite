@@ -51,6 +51,8 @@ note.txt
 notfound
 scratch/
 faq_data_cleaning/
+Screenshot/
+**/Screenshot/
 
 # Database dumps (preserve prisma sql)
 *.sql
@@ -74,3 +76,4 @@ scripts/test_*
 *.so
 
 
+.agents/skills/daily-log/SKILL.md

@@ -5,7 +5,7 @@ const cspHeader = `
   default-src 'self';
   script-src 'self' 'unsafe-eval' 'unsafe-inline' https://accounts.google.com https://connect.facebook.net https://www.youtube.com https://s.ytimg.com;
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
-  img-src 'self' blob: data: https://biltph.com https://uploadthing.com https://*.uploadthing.com https://*.googleusercontent.com https://*.facebook.com https://*.fbcdn.net https://*.ytimg.com https://*.youtube.com;
+  img-src 'self' blob: data: https://*.xfnite.cloud https://bucket.xfnite.cloud https://utfs.io https://biltph.com https://uploadthing.com https://*.uploadthing.com https://*.googleusercontent.com https://*.facebook.com https://*.fbcdn.net https://*.ytimg.com https://*.youtube.com;
   font-src 'self' https://fonts.gstatic.com data:;
   connect-src 'self' https://*.xfnite.cloud wss://*.xfnite.cloud ws://localhost:* https://accounts.google.com https://uploadthing.com https://*.uploadthing.com https://*.googleusercontent.com https://graph.facebook.com https://*.youtube.com https://*.googlevideo.com;
   frame-src 'self' https://accounts.google.com https://www.facebook.com https://www.youtube.com https://www.youtube-nocookie.com;
@@ -55,12 +55,37 @@ const nextConfig: NextConfig = {
     remotePatterns: [
       {
         protocol: "https",
+        hostname: "bucket.xfnite.cloud",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "*.xfnite.cloud",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "utfs.io",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
         hostname: "biltph.com",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "uploadthing.com",
+        pathname: "/**",
+      },
+      {
+        protocol: "https",
+        hostname: "*.uploadthing.com",
         pathname: "/**",
       },
     ],
   },
-  allowedDevOrigins: ["192.168.1.65", "192.168.1.55", "192.168.1.25"],
+  allowedDevOrigins: ["192.168.1.124", "192.168.1.65", "192.168.1.55", "192.168.1.25"],
   async redirects() {
     return [
       {

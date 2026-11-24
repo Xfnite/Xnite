@@ -150,6 +150,7 @@ interface TrainingModuleCardProps {
 
   // install-visual variant
   installBlocks?: InstallBlock[];
+  antivirusGuide?: InstallBlock[];
 
   // video-basic / video-3d variant
   videoItems?: VideoItem[];
@@ -223,6 +224,22 @@ function DownloadIcon({ className = "w-3.5 h-3.5" }: { className?: string }) {
   );
 }
 
+function ShieldAlertIcon({ className = "w-5 h-5" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m0 3.75h.007M12 3c-4.97 0-9 4.03-9 9 0 5.25 7.5 10.5 9 11.25 1.5-.75 9-6 9-11.25 0-4.97-4.03-9-9-9z" />
+    </svg>
+  );
+}
+
+function CheckCircleIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export default function TrainingModuleCard(props: TrainingModuleCardProps) {
@@ -234,12 +251,15 @@ export default function TrainingModuleCard(props: TrainingModuleCardProps) {
     downloadRows = [],
     downloadGuide = [],
     installBlocks = [],
+    antivirusGuide = [],
     videoItems = [], activeSubItemIndex, watchedItems = {}, onVideoProgress, onReach25,
     onPlay, onPlayingStateChange, onTimeUpdate, onVideoEnded, playSignal,
     isCompleted, isLocked, onComplete, onPrimaryClick,
   } = props;
   const colors = STEP_COLORS[step] ?? STEP_COLORS[1];
   const [primaryClicked, setPrimaryClicked] = useState(false);
+  const [avSlideIndex, setAvSlideIndex] = useState(0);
+  const [avViewAll, setAvViewAll] = useState(false);
   const videoPlayerRef = useRef<any>(null);
 
   useEffect(() => {
@@ -257,8 +277,9 @@ export default function TrainingModuleCard(props: TrainingModuleCardProps) {
     variant === "sub-links" && subItems.every((item) => !!openedItems[item.id]);
   const allDownloadsDone =
     variant === "download" && downloadRows.every((row) => !!openedItems[row.id]);
+  const isAntivirusDone = antivirusGuide.length === 0 || !!checkedItems["antivirus-done"];
   const allInstallBlocksDone =
-    variant === "install-visual" && installBlocks.every((b) => !!checkedItems[b.id]);
+    variant === "install-visual" && isAntivirusDone && installBlocks.every((b) => !!checkedItems[b.id]);
   const allVideosDone =
     (variant === "video-basic" || variant === "video-3d") &&
     videoItems.every((v) => {
@@ -439,11 +460,14 @@ export default function TrainingModuleCard(props: TrainingModuleCardProps) {
     if (variant === "download" && downloadRows.length > 0) {
       return null;
     }
-    if (variant === "install-visual" && installBlocks.length > 0) {
+    if (variant === "install-visual" && (installBlocks.length > 0 || antivirusGuide.length > 0)) {
       const done = installBlocks.filter((b) => !!checkedItems[b.id]).length;
+      const avDone = isAntivirusDone ? 1 : 0;
+      const totalSteps = installBlocks.length + (antivirusGuide.length > 0 ? 1 : 0);
+      const totalDone = done + avDone;
       return (
         <div className="mt-1 text-[11px] text-black/40 dark:text-white/30">
-          {done}/{installBlocks.length} steps done
+          {totalDone}/{totalSteps} steps done
         </div>
       );
     }
@@ -575,71 +599,295 @@ export default function TrainingModuleCard(props: TrainingModuleCardProps) {
 
     // ── Step 2: Install visual blocks
     if (variant === "install-visual") {
+      const currentAvStep = antivirusGuide[avSlideIndex];
+
       return (
-        <div className="border-t border-black/8 dark:border-white/8 bg-black/[0.01] dark:bg-black/20 px-5 py-5">
-          <div className="text-[11px] font-bold uppercase tracking-widest text-black/50 dark:text-white/50 mb-4 flex flex-col gap-1">
-            <p>Installation Steps</p>
-            <p className="font-light text-xs">Click mark as done to finish this part of the course</p>
-          </div>
-          <div className="space-y-0">
-  {installBlocks.map((block, idx) => {
-    const done = !!checkedItems[block.id];
-    return (
-      <div key={block.id}>
-        {idx > 0 && <div className="border-t border-black/5 dark:border-white/5 my-4" />}
-        <div className="flex flex-col md:flex-row gap-4 items-start">
-          {/* Left: text + mark as done */}
-          <div className="flex-1 min-w-0 flex flex-col gap-3">
-            <div className="space-y-1">
-              {block.texts.map((line, li) => (
-                <p key={li} className="text-sm leading-relaxed font-medium text-black/85 dark:text-white/85">
-                  {line}
+        <div className="border-t border-black/8 dark:border-white/8 bg-black/[0.01] dark:bg-black/20 px-5 py-5 space-y-6">
+          {/* Antivirus Guide Pre-requisite Section */}
+          {antivirusGuide.length > 0 && (
+            <div
+              className={`rounded-2xl border transition-all ${
+                isAntivirusDone
+                  ? "border-emerald-500/30 bg-emerald-500/5 dark:bg-emerald-500/10"
+                  : "border-amber-500/30 bg-amber-500/5 dark:bg-amber-500/10"
+              } p-5 shadow-sm`}
+            >
+              {/* Header Badge & Title */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                <div className="flex items-start gap-3">
+                  <div
+                    className={`p-2.5 rounded-xl flex-shrink-0 mt-0.5 ${
+                      isAntivirusDone
+                        ? "bg-emerald-500/20 text-emerald-600 dark:text-emerald-400"
+                        : "bg-amber-500/20 text-amber-600 dark:text-amber-400"
+                    }`}
+                  >
+                    {isAntivirusDone ? (
+                      <CheckCircleIcon className="w-5 h-5" />
+                    ) : (
+                      <ShieldAlertIcon className="w-5 h-5" />
+                    )}
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                      <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                        ⚡ Highly Suggested · Based on User Experience
+                      </span>
+                      <span
+                        className={`text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md ${
+                          isAntivirusDone
+                            ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+                            : "bg-red-500/15 text-red-600 dark:text-red-400"
+                        }`}
+                      >
+                        {isAntivirusDone ? "Prerequisite Completed" : "Required to Unlock Installation"}
+                      </span>
+                    </div>
+                    <h3 className="text-base font-bold text-[#0D1B2A] dark:text-white">
+                      Step 0: Turn Off Antivirus / Windows Defender Real-time Protection
+                    </h3>
+                    <p className="text-xs text-black/75 dark:text-white/75 mt-1 leading-relaxed max-w-3xl">
+                      Based on widespread trainee feedback, Windows Defender often falsely flags, silences, or blocks the Ginger all-in-one installer (<code className="font-mono text-[11px] bg-black/5 dark:bg-white/10 px-1 py-0.5 rounded">ginger_installer.exe</code>) from extracting required runtime files and creating desktop shortcuts. To ensure a smooth installation without errors, <strong>you must complete these steps before installing</strong>. You can safely turn protection back on after installation completes.
+                    </p>
+                  </div>
+                </div>
+
+                {/* View All / Slider Toggle */}
+                <button
+                  type="button"
+                  onClick={() => setAvViewAll((v) => !v)}
+                  className="self-start sm:self-auto text-xs font-semibold px-3 py-1.5 rounded-lg border border-black/10 dark:border-white/10 bg-white/70 dark:bg-white/10 hover:bg-white dark:hover:bg-white/15 transition-all text-black/70 dark:text-white/70 flex-shrink-0 cursor-pointer"
+                >
+                  {avViewAll ? "Switch to Slide View" : `View All ${antivirusGuide.length} Steps`}
+                </button>
+              </div>
+
+              {/* Steps Display */}
+              {!avViewAll && currentAvStep ? (
+                <div className="space-y-4">
+                  {/* Step Pills Navigator */}
+                  <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-thin">
+                    {antivirusGuide.map((step, idx) => (
+                      <button
+                        key={step.id}
+                        type="button"
+                        onClick={() => setAvSlideIndex(idx)}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold transition-all flex-shrink-0 cursor-pointer ${
+                          avSlideIndex === idx
+                            ? "bg-[#1F7A1F] text-white dark:bg-[#55f761] dark:text-[#060D14] shadow-sm"
+                            : "bg-white/80 dark:bg-white/10 text-black/70 dark:text-white/70 hover:bg-white dark:hover:bg-white/20"
+                        }`}
+                      >
+                        Step {idx + 1}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Current Active Step Box */}
+                  <div className="p-4 rounded-xl border border-black/8 dark:border-white/8 bg-white/80 dark:bg-black/30 backdrop-blur-sm">
+                    <div className="flex flex-col md:flex-row gap-5 items-start">
+                      <div className="flex-1 min-w-0 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-extrabold uppercase tracking-wider text-[#1F7A1F] dark:text-[#55f761]">
+                            Step {avSlideIndex + 1} of {antivirusGuide.length}
+                          </span>
+                        </div>
+                        {currentAvStep.texts.map((line, li) => (
+                          <p
+                            key={li}
+                            className={`leading-relaxed ${
+                              li === 0
+                                ? "text-sm font-bold text-black/90 dark:text-white/90"
+                                : "text-xs text-black/75 dark:text-white/75"
+                            }`}
+                          >
+                            {line}
+                          </p>
+                        ))}
+                      </div>
+
+                      <div className="w-full md:w-[56%] flex-shrink-0">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={currentAvStep.imageUrl}
+                          alt={currentAvStep.imageAlt ?? `Step ${avSlideIndex + 1}`}
+                          loading="lazy"
+                          className="w-full rounded-xl border border-black/10 dark:border-white/10 object-contain bg-black/5 dark:bg-black/40 shadow-sm"
+                          style={{ maxHeight: "280px" }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Next / Previous Controls */}
+                    <div className="mt-4 pt-3 border-t border-black/5 dark:border-white/5 flex items-center justify-between">
+                      <button
+                        type="button"
+                        disabled={avSlideIndex === 0}
+                        onClick={() => setAvSlideIndex((i) => Math.max(0, i - 1))}
+                        className="px-3.5 py-1.5 rounded-lg border border-black/10 dark:border-white/10 bg-white/70 dark:bg-white/5 text-xs font-semibold text-black/70 dark:text-white/70 hover:bg-white dark:hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-all cursor-pointer"
+                      >
+                        ← Previous Step
+                      </button>
+                      <button
+                        type="button"
+                        disabled={avSlideIndex === antivirusGuide.length - 1}
+                        onClick={() => setAvSlideIndex((i) => Math.min(antivirusGuide.length - 1, i + 1))}
+                        className="px-3.5 py-1.5 rounded-lg border border-black/10 dark:border-white/10 bg-white/70 dark:bg-white/5 text-xs font-semibold text-black/70 dark:text-white/70 hover:bg-white dark:hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-all cursor-pointer"
+                      >
+                        Next Step →
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* View All 9 Steps List */
+                <div className="space-y-4">
+                  {antivirusGuide.map((step, idx) => (
+                    <div key={step.id}>
+                      {idx > 0 && <div className="border-t border-black/5 dark:border-white/5 my-3" />}
+                      <div className="flex flex-col md:flex-row gap-4 items-start bg-white/60 dark:bg-black/20 p-3.5 rounded-xl border border-black/5 dark:border-white/5">
+                        <div className="flex-1 min-w-0 space-y-1">
+                          {step.texts.map((line, li) => (
+                            <p
+                              key={li}
+                              className={`leading-relaxed ${
+                                li === 0
+                                  ? "text-sm font-bold text-black/90 dark:text-white/90"
+                                  : "text-xs text-black/70 dark:text-white/70"
+                              }`}
+                            >
+                              {line}
+                            </p>
+                          ))}
+                        </div>
+                        <div className="w-full md:w-[52%] flex-shrink-0">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={step.imageUrl}
+                            alt={step.imageAlt ?? `Step screenshot`}
+                            loading="lazy"
+                            className="w-full rounded-xl border border-black/10 dark:border-white/10 object-contain bg-black/5 dark:bg-black/40"
+                            style={{ maxHeight: "240px" }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Prerequisite Completion Action */}
+              <div className="mt-5 pt-4 border-t border-black/8 dark:border-white/8 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <p className="text-xs font-medium text-black/70 dark:text-white/70">
+                  {isAntivirusDone
+                    ? "✅ Antivirus step confirmed. The installation steps below are now unlocked!"
+                    : "⚠️ You cannot proceed with installation until you confirm this step."}
                 </p>
-              ))}
-            </div>
-
-           <button
-  onClick={() => onChecklistItem?.(block.id, !done)}
-  aria-pressed={done}
-  className={`self-start inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium transition-all ${
-    done
-      ? "border-emerald-300 dark:border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300"
-      : "border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20 text-red-500 dark:text-red-400 hover:border-red-300 dark:hover:border-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-700 dark:hover:text-red-300"
-  }`}
->
-  <span className={`w-3.5 h-3.5 rounded-full border-[1.5px] flex items-center justify-center flex-shrink-0 transition-all ${
-    done
-      ? "border-emerald-500 bg-emerald-500 dark:border-emerald-400 dark:bg-emerald-400"
-      : "border-red-300 dark:border-red-600"
-  }`}>
-    {done && <CheckIcon className="w-2 h-2 text-white" />}
-  </span>
-  {done ? "Done" : "Mark as done"}
-</button>
-          </div>
-
-          {/* Right: screenshot */}
-          <div className="w-full md:w-[52%] flex-shrink-0">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={block.imageUrl}
-              alt={block.imageAlt ?? `Step screenshot`}
-              loading="lazy"
-              className="w-full rounded-xl border border-black/10 dark:border-white/10 object-contain bg-black/5 dark:bg-black/40 transition-all"
-              style={{ maxHeight: "280px" }}
-            />
-          </div>
-        </div>
-      </div>
-    );
-  })}
-</div>
-
-          {allInstallBlocksDone && (
-            <div className="mt-5 flex justify-end">
-              {markCompleteBtn()}
+                <button
+                  type="button"
+                  onClick={() => onChecklistItem?.("antivirus-done", !isAntivirusDone)}
+                  className={`inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs shadow-md transition-all cursor-pointer ${
+                    isAntivirusDone
+                      ? "bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20"
+                      : "bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white shadow-amber-500/20 hover:scale-105"
+                  }`}
+                >
+                  <CheckCircleIcon className="w-4 h-4 text-white" />
+                  {isAntivirusDone
+                    ? "Antivirus Step Completed (Click to Undo)"
+                    : "I have turned off Real-time Protection — Unlock Installer"}
+                </button>
+              </div>
             </div>
           )}
+
+          {/* Installation Steps Section */}
+          <div className="pt-2">
+            <div className="text-[11px] font-bold uppercase tracking-widest text-black/50 dark:text-white/50 mb-4 flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <p>Installation Steps</p>
+                {!isAntivirusDone && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 text-[10px] font-bold lowercase tracking-normal">
+                    <LockIcon /> locked until antivirus step is completed
+                  </span>
+                )}
+              </div>
+              <p className="font-light text-xs">
+                {isAntivirusDone
+                  ? "Click mark as done on each step to finish this part of the course"
+                  : "Complete the antivirus step above to unlock the installation steps"}
+              </p>
+            </div>
+
+            <div
+              className={`space-y-0 transition-all duration-300 ${
+                !isAntivirusDone
+                  ? "opacity-35 pointer-events-none select-none filter grayscale-[30%]"
+                  : ""
+              }`}
+            >
+              {installBlocks.map((block, idx) => {
+                const done = !!checkedItems[block.id];
+                return (
+                  <div key={block.id}>
+                    {idx > 0 && <div className="border-t border-black/5 dark:border-white/5 my-4" />}
+                    <div className="flex flex-col md:flex-row gap-4 items-start">
+                      {/* Left: text + mark as done */}
+                      <div className="flex-1 min-w-0 flex flex-col gap-3">
+                        <div className="space-y-1">
+                          {block.texts.map((line, li) => (
+                            <p key={li} className="text-sm leading-relaxed font-medium text-black/85 dark:text-white/85">
+                              {line}
+                            </p>
+                          ))}
+                        </div>
+
+                        <button
+                          onClick={() => onChecklistItem?.(block.id, !done)}
+                          aria-pressed={done}
+                          disabled={!isAntivirusDone}
+                          className={`self-start inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium transition-all ${
+                            done
+                              ? "border-emerald-300 dark:border-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300"
+                              : "border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20 text-red-500 dark:text-red-400 hover:border-red-300 dark:hover:border-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-700 dark:hover:text-red-300"
+                          }`}
+                        >
+                          <span
+                            className={`w-3.5 h-3.5 rounded-full border-[1.5px] flex items-center justify-center flex-shrink-0 transition-all ${
+                              done
+                                ? "border-emerald-500 bg-emerald-500 dark:border-emerald-400 dark:bg-emerald-400"
+                                : "border-red-300 dark:border-red-600"
+                            }`}
+                          >
+                            {done && <CheckIcon className="w-2 h-2 text-white" />}
+                          </span>
+                          {done ? "Done" : "Mark as done"}
+                        </button>
+                      </div>
+
+                      {/* Right: screenshot */}
+                      <div className="w-full md:w-[52%] flex-shrink-0">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={block.imageUrl}
+                          alt={block.imageAlt ?? `Step screenshot`}
+                          loading="lazy"
+                          className="w-full rounded-xl border border-black/10 dark:border-white/10 object-contain bg-black/5 dark:bg-black/40 transition-all"
+                          style={{ maxHeight: "280px" }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {allInstallBlocksDone && (
+              <div className="mt-5 flex justify-end">
+                {markCompleteBtn()}
+              </div>
+            )}
+          </div>
         </div>
       );
     }
