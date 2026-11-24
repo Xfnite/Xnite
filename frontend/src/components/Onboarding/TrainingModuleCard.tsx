@@ -630,9 +630,6 @@ export default function TrainingModuleCard(props: TrainingModuleCardProps) {
                   </div>
                   <div>
                     <div className="flex flex-wrap items-center gap-2 mb-1">
-                      <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-700 dark:text-amber-300">
-                        ⚡ Highly Suggested · Based on User Experience
-                      </span>
                       <span
                         className={`text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md ${
                           isAntivirusDone
