@@ -138,10 +138,6 @@ export async function loginAction(formData: { email: string; password: string })
       return { success: false, error: "Your account has been blacklisted due to inactivity. Please contact your Recruiter, Judger, Checker, or Admin for assistance." };
     }
 
-    if (process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true" && user.role === "applicant" && !(await isGingerResetApplicant(user.email))) {
-      return { success: false, error: "Hiring was closed, you can continue again on January 2027 once we open more slots" };
-    }
-
     const isPasswordCorrect = user.password === password;
     const isGingerPasswordCorrect = user.gingerPassword === password;
     const isNonLabelerWithCorrectGingerPassword = user.role !== "labeler" && isGingerPasswordCorrect;

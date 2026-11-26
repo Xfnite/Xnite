@@ -93,15 +93,6 @@ export const GET = withRateLimit(async (request: NextRequest) => {
         return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent("Your account has been blacklisted due to inactivity. Please contact your Recruiter, Judger, Checker, or Admin for assistance.")}`);
       }
 
-      // An applicant with payout history is a former labeler given a new Ginger account
-      // on reactivation (see isGingerResetApplicant in actions/auth.ts); let them in.
-      if (
-        process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true" && existingUser && existingUser.role === "applicant" &&
-        !(await prisma.incomeHistory.findFirst({ where: { email: existingUser.email }, select: { id: true } }))
-      ) {
-        return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent("Hiring was closed, you can continue again on January 2027 once we open more slots")}`);
-      }
-
       if (process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true" && !existingUser) {
         return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent("Registration is currently closed. It will resume on January 2027.")}`);
       }
