@@ -146,7 +146,7 @@ export function ActiveProjectsTab({
 
   useEffect(() => {
     if (walkthroughStep >= 0) {
-      if (walkthroughStep <= maxWalkthroughStep) {
+      if (walkthroughStep <= maxWalkthroughStep || tutProgress?.project_walkthrough_completed === true) {
         setWalkthroughCooldown(0);
       } else {
         setMaxWalkthroughStep(walkthroughStep);
@@ -282,7 +282,6 @@ export function ActiveProjectsTab({
         return () => clearInterval(fallbackTimer);
       }
       if (tutProgress?.project_walkthrough_completed === true || tutProgress?.active_projects_start_walkthrough_completed === true) {
-        if (walkthroughStep !== -1) setWalkthroughStep(-1);
         return () => clearInterval(fallbackTimer);
       }
 
@@ -1854,7 +1853,7 @@ export function ActiveProjectsTab({
       />
 
       {/* Walkthrough Tooltip Overlay */}
-      {walkthroughStep >= 0 && !tutProgress?.project_walkthrough_completed && (
+      {walkthroughStep >= 0 && (
         <>
           {/* Backdrop overlay - covers the entire screen including sidebar for focus */}
           <div className="fixed inset-0 z-[9999] bg-black/85 transition-all duration-300 pointer-events-none" />

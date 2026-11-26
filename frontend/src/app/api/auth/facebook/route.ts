@@ -71,7 +71,7 @@ export const GET = withRateLimit(async (request: NextRequest) => {
       }
 
       if (process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true" && !existingUser) {
-        return NextResponse.redirect(`${origin}/login?error=Registration%20is%20currently%20disabled.`);
+        return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent("Registration is currently closed. It will resume on January 2027.")}`);
       }
 
       if (actionFromState === "signup" || rawState === "signup") {

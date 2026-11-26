@@ -195,6 +195,13 @@ function LoginPageInner() {
           </p>
         </div>
 
+        {process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true" && (
+          <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs text-center font-medium flex items-center justify-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span>Registration is currently closed and will resume on January 2027.</span>
+          </div>
+        )}
+
         {error && (
           <div className="mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 text-red-600 dark:text-red-300 text-xs text-center font-medium">
             {error}
@@ -359,7 +366,7 @@ function LoginPageInner() {
                   fill="#EA4335"
                 />
               </svg>
-              Sign Up or Continue with Google
+              {process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true" ? "Continue with Google" : "Sign Up or Continue with Google"}
             </button>
 
             {/* <div className="text-center text-sm text-[#2F3E46] dark:text-white/60 mt-2">

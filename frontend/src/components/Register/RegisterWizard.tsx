@@ -156,7 +156,7 @@ export default function RegisterWizard({
                 </h1>
                 
                 <p className="text-sm text-[#2F3E46] dark:text-white/70 leading-relaxed mb-8 max-w-md mx-auto">
-                  We are not accepting new registrations at this time. If you already have an account, please proceed to the login page.
+                  We are not accepting new registrations at this time. Registration will resume on January 2027. If you already have an account, please proceed to the login page.
                 </p>
 
                 <button

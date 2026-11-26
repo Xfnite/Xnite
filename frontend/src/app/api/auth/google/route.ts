@@ -99,11 +99,11 @@ export const GET = withRateLimit(async (request: NextRequest) => {
         process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true" && existingUser && existingUser.role === "applicant" &&
         !(await prisma.incomeHistory.findFirst({ where: { email: existingUser.email }, select: { id: true } }))
       ) {
-        return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent("Hiring was closed, you can continue again on November 2026 once we open more slots")}`);
+        return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent("Hiring was closed, you can continue again on January 2027 once we open more slots")}`);
       }
 
       if (process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true" && !existingUser) {
-        return NextResponse.redirect(`${origin}/login?error=Registration%20is%20currently%20disabled.`);
+        return NextResponse.redirect(`${origin}/login?error=${encodeURIComponent("Registration is currently closed. It will resume on January 2027.")}`);
       }
 
       // If they came from the signup page, redirect to the referrer collection page

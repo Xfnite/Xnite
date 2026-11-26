@@ -139,7 +139,7 @@ export async function loginAction(formData: { email: string; password: string })
     }
 
     if (process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true" && user.role === "applicant" && !(await isGingerResetApplicant(user.email))) {
-      return { success: false, error: "Hiring was closed, you can continue again on November 2026 once we open more slots" };
+      return { success: false, error: "Hiring was closed, you can continue again on January 2027 once we open more slots" };
     }
 
     const isPasswordCorrect = user.password === password;
@@ -585,7 +585,7 @@ export async function registerAction(data: {
   password?: string;
 }) {
   if (process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true") {
-    return { success: false, error: "Registration is currently disabled." };
+    return { success: false, error: "Registration is currently closed. It will resume on January 2027." };
   }
 
   try {
@@ -745,7 +745,7 @@ export async function completeProfileAction(data: {
         select: { id: true },
       });
       if (!existingUser) {
-        return { success: false, error: "Registration is currently disabled." };
+        return { success: false, error: "Registration is currently closed. It will resume on January 2027." };
       }
     }
 
@@ -940,7 +940,7 @@ export async function registerWithGingerAction() {
         const existingUser = await prisma.user.findUnique({ where: { email } });
         if (!existingUser) {
           if (process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true") {
-            return { success: false, error: "Registration is currently disabled." };
+            return { success: false, error: "Registration is currently closed. It will resume on January 2027." };
           }
           let finalRefererEmail = refererEmail || null;
           let finalLabelerRefererEmail = null;

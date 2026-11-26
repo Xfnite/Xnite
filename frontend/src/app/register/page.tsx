@@ -94,7 +94,7 @@ export default async function RegisterPage() {
 
   // If registration is disabled and they are not an existing user, redirect to login with error
   if (process.env.NEXT_PUBLIC_ENABLE_REGISTRATION !== "true" && !isExistingUser) {
-    redirect("/login?error=Registration%20is%20currently%20disabled.");
+    redirect(`/login?error=${encodeURIComponent("Registration is currently closed. It will resume on January 2027.")}`);
   }
 
   const fullName = cookieStore.get("signup_name")?.value || "";
